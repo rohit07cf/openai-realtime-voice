@@ -56,3 +56,30 @@ class ConnectionState(StrEnum):
     CONNECTED = "connected"
     RECONNECTING = "reconnecting"
     CIRCUIT_OPEN = "circuit_open"
+
+
+class MicState(StrEnum):
+    """Microphone states for the user panel in the voice-only UI.
+
+    Drives the push-to-talk UX:
+    - IDLE: mic is off, waiting for user to press
+    - RECORDING: mic is actively capturing audio frames
+    - SENDING: audio committed, waiting for server acknowledgement
+    """
+
+    IDLE = "idle"
+    RECORDING = "recording"
+    SENDING = "sending"
+
+
+class AgentSpeakingState(StrEnum):
+    """Agent panel states reflecting the model's response lifecycle.
+
+    - IDLE: no active response
+    - THINKING: audio committed, server is generating (before first audio delta)
+    - SPEAKING: response.audio.delta events are streaming
+    """
+
+    IDLE = "idle"
+    THINKING = "thinking"
+    SPEAKING = "speaking"

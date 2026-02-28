@@ -1,18 +1,20 @@
 # OpenAI Realtime Voice Agent
 
-A production-ready implementation of OpenAI's Realtime API for deploying high-performance, low-latency AI voice agents. Built with **Streamlit**, **Pydantic v2**, **asyncio**, and **websockets**.
+A production-ready, **voice-only** implementation of OpenAI's Realtime API with a split-screen Streamlit UI. Built with **Pydantic v2**, **asyncio**, **websockets**, and push-to-talk UX.
 
 ## What This Project Is
 
-This project demonstrates a clean, event-driven architecture for building voice agents on top of the OpenAI Realtime WebSocket API. It prioritizes **correctness**, **type safety**, and **resilience** over feature count — making it a strong reference for how to structure real-time streaming applications in Python.
+This project demonstrates a clean, event-driven architecture for building voice agents on top of the OpenAI Realtime WebSocket API. It is **strictly voice-based** — there are no text-input chat fields. The user interacts exclusively through a microphone button using push-to-talk.
 
 Key capabilities:
+- **Voice-only split-screen UI** — USER panel (mic + transcript) | AGENT panel (avatar + transcript)
+- **Push-to-talk microphone button** — click to record, click again to stop and send
 - **Validated configuration** — every session parameter is checked before hitting the wire
 - **Discriminated-union event parsing** — raw JSON becomes typed Python objects or fails loudly
 - **Observer-pattern event routing** — subsystems register for events independently
 - **Thread-safe audio buffering** — async producer, sync consumer, zero corruption
 - **Circuit-breaker resilience** — automatic backoff and recovery on disconnects
-- **Demo mode** — test the full pipeline via text input (no microphone required)
+- **Agent avatar upload** — personalize the agent panel with a custom image
 
 ## Demo — How to Run
 
@@ -38,8 +40,9 @@ streamlit run app/main.py
 
 1. Enter your OpenAI API key in the sidebar
 2. Adjust voice, temperature, and turn-detection settings
-3. Click **Connect**
-4. Use **Demo Mode** to send text messages — or connect a microphone for full voice interaction
+3. Optionally upload an agent avatar image
+4. Click **Connect**
+5. Press **Push to Talk** to record, press **Stop & Send** to submit your audio
 
 ### Environment Variables (optional)
 
@@ -56,55 +59,95 @@ LOG_LEVEL=INFO
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        Streamlit UI                             │
-│  ┌──────────┐  ┌───────────┐  ┌──────────┐  ┌──────────────┐  │
-│  │  Config   │  │ Transcript│  │  Audio   │  │  Debug Log   │  │
-│  │  Panel    │  │   View    │  │  Status  │  │   Panel      │  │
-│  └────┬─────┘  └─────▲─────┘  └────▲─────┘  └──────▲───────┘  │
-│       │               │             │               │          │
-└───────┼───────────────┼─────────────┼───────────────┼──────────┘
-        │               │             │               │
-   ┌────▼───────────────┴─────────────┴───────────────┴────┐
-   │                  VoiceAgentBridge                      │
-   │              (Adapter / Bridge Pattern)                │
-   │   ┌──────────────┐          ┌──────────────────┐      │
-   │   │ AudioBuffer   │◄────────│  Event Handlers  │      │
-   │   │ (thread-safe) │         │  (async → sync)  │      │
-   │   └──────────────┘          └────────▲─────────┘      │
-   └──────────┬───────────────────────────┼────────────────┘
-              │ send()                    │ dispatch()
-   ┌──────────▼───────────────────────────┴────────────────┐
-   │                  RealtimeManager                      │
-   │                  (Singleton Pattern)                   │
-   │  ┌─────────────────┐    ┌──────────────────────┐      │
-   │  │ RealtimeConnection│   │  EventDispatcher     │      │
-   │  │ (Adapter Pattern) │   │  (Observer Pattern)  │      │
-   │  │                   │   │                      │      │
-   │  │  WebSocket ←──────┼───┤  register(type, fn)  │      │
-   │  │  send / recv      │   │  dispatch(event)     │      │
-   │  └─────────────────┘    └──────────────────────┘      │
-   │  ┌──────────────────────────────────────────────┐      │
-   │  │         CircuitBreaker + RetryPolicy         │      │
-   │  │         (Circuit Breaker Pattern)            │      │
-   │  └──────────────────────────────────────────────┘      │
-   └────────────────────────────────────────────────────────┘
-              │
-              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    Streamlit Split-Screen UI                        │
+│  ┌─────────────────────────┐  ┌──────────────────────────────┐     │
+│  │       USER PANEL        │  │        AGENT PANEL           │     │
+│  │                         │  │                              │     │
+│  │  🎤 Push-to-Talk Btn   │  │  🤖 Agent Avatar             │     │
+│  │                         │  │                              │     │
+│  │  Mic Status:            │  │  Agent Status:               │     │
+│  │  ⚪ Idle                │  │  ⚪ Idle                     │     │
+│  │  🔴 Recording...       │  │  🟡 Thinking...              │     │
+│  │  🟡 Sending...         │  │  🟢 Speaking...              │     │
+│  │                         │  │                              │     │
+│  │  [User Transcript]     │  │  [Agent Transcript]          │     │
+│  │  (read-only)           │  │  (read-only)                 │     │
+│  └────────────┬────────────┘  └──────────▲───────────────────┘     │
+│               │                          │                         │
+└───────────────┼──────────────────────────┼─────────────────────────┘
+                │                          │
+   ┌────────────▼──────────────────────────┴──────────────────┐
+   │                   VoiceAgentBridge                        │
+   │               (Adapter / Bridge Pattern)                  │
+   │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐   │
+   │  │ AudioBuffer   │  │  MicState    │  │ AgentState   │   │
+   │  │ (thread-safe) │  │  tracking    │  │ tracking     │   │
+   │  └──────────────┘  └──────────────┘  └──────────────┘   │
+   │           ▲              Event Handlers                   │
+   └───────────┼──────────────────────────────────────────────┘
+               │ send()                    dispatch()
+   ┌───────────▼──────────────────────────────────────────────┐
+   │                   RealtimeManager                         │
+   │                   (Singleton Pattern)                      │
+   │  ┌─────────────────┐    ┌──────────────────────────┐     │
+   │  │ RealtimeConnection│   │    EventDispatcher       │     │
+   │  │ (Adapter Pattern) │   │    (Observer Pattern)    │     │
+   │  │                   │   │                          │     │
+   │  │  WebSocket        │   │  register(type, fn)      │     │
+   │  │  send / recv      │   │  dispatch(event)         │     │
+   │  └─────────────────┘    └──────────────────────────┘     │
+   │  ┌──────────────────────────────────────────────────┐     │
+   │  │         CircuitBreaker + RetryPolicy             │     │
+   │  │         (Circuit Breaker Pattern)                │     │
+   │  └──────────────────────────────────────────────────┘     │
+   └───────────────────────────────────────────────────────────┘
+               │
+               ▼
    ┌────────────────────────┐
    │  OpenAI Realtime API   │
    │  wss://api.openai.com  │
    └────────────────────────┘
 ```
 
+### Voice-Only UX Flow
+
+```
+User presses 🎤 Push to Talk
+         │
+         ▼
+  MicState = RECORDING
+  (audio frames captured)
+         │
+User presses ⏹ Stop & Send
+         │
+         ▼
+  MicState = SENDING
+  → input_audio_buffer.commit
+  → response.create
+         │
+         ▼
+  AgentState = THINKING
+  (waiting for first audio delta)
+         │
+         ▼
+  AgentState = SPEAKING
+  (response.audio.delta streaming)
+         │
+         ▼
+  response.done
+  AgentState = IDLE
+  MicState = IDLE
+```
+
 ### Data Flow
 
 1. **Config Panel** → `RealtimeConfig` (Pydantic validated) → `session.update` event
-2. **User Input** (text or audio) → `ClientEvent` → WebSocket → OpenAI
+2. **Mic Button** → audio frames → `input_audio_buffer.append` → `commit` → `response.create`
 3. **OpenAI** → raw JSON → `parse_server_event()` → typed `ServerEvent`
-4. **EventDispatcher** → routes to registered handlers (audio, transcript, error)
-5. **AudioBuffer** (thread-safe) → Streamlit UI reads for playback status
-6. **Transcript** accumulation → rendered in chat-message format
+4. **EventDispatcher** → routes to handlers (audio buffer, transcript, state transitions)
+5. **AudioBuffer** (thread-safe) → UI reads buffer depth for status display
+6. **Split Transcripts** → user utterances (left panel) | agent responses (right panel)
 
 ## Design Patterns Used
 
@@ -116,13 +159,51 @@ Decouples event producers (the receive loop) from consumers (audio pipeline, tra
 
 ### Adapter / Bridge — `VoiceAgentBridge`, `RealtimeConnection`
 - `RealtimeConnection` wraps the `websockets` library behind a minimal interface, making it swappable.
-- `VoiceAgentBridge` translates the async engine's interface into synchronous calls that Streamlit can make, and converts raw audio deltas into buffered PCM16 data.
+- `VoiceAgentBridge` translates the async engine's interface into synchronous calls that Streamlit can make, manages mic/agent state machines, and routes audio deltas into the thread-safe buffer.
 
 ### Circuit Breaker — `CircuitBreaker`
 Three-state machine (CLOSED → OPEN → HALF_OPEN) that prevents the system from hammering a failing endpoint. After N consecutive failures, reconnect attempts are paused for a cooldown period, giving the remote service time to recover.
 
 ### Discriminated Union — `ServerEvent`, `ClientEvent`
 Pydantic's `Literal` discriminator on the `type` field turns raw JSON into the exact Python subclass — or raises a clear `ValidationError`. Unrecognized event types fall back to `GenericServerEvent` so the pipeline never drops data silently.
+
+## Voice-Only UX Design
+
+### Why Voice-Only?
+
+This project deliberately excludes text-input chat fields. The rationale:
+
+1. **Focus** — A voice agent's value is in its voice interaction. Text input dilutes the demo.
+2. **State clarity** — With push-to-talk, the state machine is simple and deterministic: IDLE → RECORDING → SENDING → (agent) THINKING → SPEAKING → IDLE.
+3. **Resume signal** — Building a voice-only agent with proper state management demonstrates more architectural skill than a text chat wrapper.
+
+### Split-Screen Layout
+
+The UI is divided into two equal columns:
+
+| USER Panel (Left) | AGENT Panel (Right) |
+|---|---|
+| Mic button (push-to-talk) | Agent avatar (uploadable) |
+| Mic status indicator | Agent speaking status |
+| Read-only user transcript | Read-only agent transcript |
+
+Both transcript panels are **read-only**. Users cannot type into them.
+
+### Mic States
+
+| State | Indicator | Trigger |
+|-------|-----------|---------|
+| `IDLE` | ⚪ Idle | Initial / after agent finishes |
+| `RECORDING` | 🔴 Recording... | User presses mic button |
+| `SENDING` | 🟡 Sending... | User stops recording |
+
+### Agent States
+
+| State | Indicator | Trigger |
+|-------|-----------|---------|
+| `IDLE` | ⚪ Idle | Initial / after `response.done` |
+| `THINKING` | 🟡 Thinking... | After `commit` / `response.create` |
+| `SPEAKING` | 🟢 Speaking... | First `response.audio.delta` arrives |
 
 ## Design Document: Pydantic for Data Integrity in Streaming
 
@@ -177,10 +258,10 @@ We validate *at the boundary* (event parsing, config construction) and trust *wi
 .
 ├── app/
 │   ├── __init__.py
-│   ├── main.py                          # Streamlit entrypoint
+│   ├── main.py                          # Streamlit entrypoint (split-screen)
 │   ├── models/
 │   │   ├── __init__.py
-│   │   ├── enums.py                     # Voice, Modality, ConnectionState
+│   │   ├── enums.py                     # Voice, Modality, MicState, AgentSpeakingState
 │   │   ├── config.py                    # RealtimeConfig, AppSettings
 │   │   └── events.py                    # ServerEvent, ClientEvent unions
 │   ├── core/
@@ -191,19 +272,21 @@ We validate *at the boundary* (event parsing, config construction) and trust *wi
 │   │   └── resilience.py                # CircuitBreaker, retry_with_backoff
 │   ├── ui/
 │   │   ├── __init__.py
-│   │   ├── bridge.py                    # VoiceAgentBridge (Adapter)
-│   │   └── components.py               # Streamlit rendering functions
+│   │   ├── bridge.py                    # VoiceAgentBridge (Adapter, voice-only)
+│   │   └── components.py               # Split-screen rendering functions
 │   ├── utils/
 │   │   ├── __init__.py
 │   │   ├── audio.py                     # AudioBuffer, PCM16 conversions
 │   │   └── logging.py                   # Logging setup
-│   └── tests/
-│       ├── __init__.py
-│       ├── conftest.py
-│       ├── test_config_validation.py    # 16 tests
-│       ├── test_event_parsing.py        # 14 tests
-│       ├── test_dispatcher.py           # 10 tests
-│       └── test_audio_buffer.py         # 15 tests
+│   ├── tests/
+│   │   ├── __init__.py
+│   │   ├── conftest.py
+│   │   ├── test_config_validation.py    # 16 tests
+│   │   ├── test_event_parsing.py        # 14 tests
+│   │   ├── test_dispatcher.py           # 10 tests
+│   │   ├── test_audio_buffer.py         # 15 tests
+│   │   └── test_voice_bridge.py         # 20 tests (mic/agent state + split transcript)
+│   └── assets/
 ├── README.md
 ├── pyproject.toml
 ├── .gitignore
@@ -214,7 +297,7 @@ We validate *at the boundary* (event parsing, config construction) and trust *wi
 
 ## Testing Strategy
 
-**60 tests** across four test modules:
+**80 tests** across five test modules:
 
 | Module | Tests | What it validates |
 |--------|-------|-------------------|
@@ -222,6 +305,7 @@ We validate *at the boundary* (event parsing, config construction) and trust *wi
 | `test_event_parsing.py` | 14 | Discriminated union dispatch, fallback for unknown events, client event construction |
 | `test_dispatcher.py` | 10 | Handler routing, error isolation, global handlers, unregister, clear |
 | `test_audio_buffer.py` | 15 | Buffer operations, ring-buffer eviction, thread safety, PCM16 conversions, circuit breaker states |
+| `test_voice_bridge.py` | 20 | Mic state transitions, agent state lifecycle, split transcript channels, disconnect resets, enum validation |
 
 Run all tests:
 
@@ -233,17 +317,17 @@ pytest -v
 
 ### Known Limitations
 
-- **No browser audio capture yet** — `streamlit-webrtc` integration is stubbed but not wired. The demo uses text-input mode.
-- **Audio playback** — The UI shows buffer depth but does not auto-play audio through the browser. A WebRTC or JavaScript bridge is needed.
+- **streamlit-webrtc not yet wired** — The mic button manages state transitions but actual browser audio capture via streamlit-webrtc needs to be connected. The architecture is ready for it.
+- **Audio playback** — The UI shows buffer depth but does not auto-play audio through the browser. A WebRTC or JavaScript bridge is needed for actual speaker output.
 - **Single session** — The singleton manager supports one concurrent session. Multi-tenant deployments would need a session-per-user registry.
 - **No function calling** — Tool/function definitions are accepted in config but the handler pipeline is not implemented.
 
 ### Next Steps
 
-1. **streamlit-webrtc integration** — Capture mic audio in the browser and stream to `input_audio_buffer.append`
-2. **JavaScript audio player** — Use `st.components.v1.html` to play PCM16 audio chunks in real time
-3. **Function calling** — Parse `response.function_call_arguments.done` and invoke registered Python functions
-4. **Observability** — Structured JSON logging, OpenTelemetry spans for event latency
+1. **streamlit-webrtc integration** — Capture mic audio frames in the browser, convert to PCM16, and feed into `input_audio_buffer.append`
+2. **JavaScript audio player** — Use `st.components.v1.html` to play PCM16 audio chunks in real time from the AudioBuffer
+3. **Server VAD mode** — When VAD is enabled, auto-commit on `input_audio_buffer.speech_stopped` instead of requiring button press
+4. **Function calling** — Parse `response.function_call_arguments.done` and invoke registered Python functions
 5. **Ephemeral tokens** — Use the `/v1/realtime/client_secrets` endpoint for browser-safe auth
 
 ## License

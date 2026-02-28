@@ -2,9 +2,10 @@
 
 Responsibility: Expose a clean, synchronous-friendly API that the
     Streamlit script can call without importing asyncio, websockets,
-    or Pydantic event internals.
+    or Pydantic event internals.  This is a *voice-only* bridge — there
+    is no text-input path.
 Pattern: Adapter / Bridge — translates between two incompatible
-    interfaces (async engine ↔ sync Streamlit re-run model).
+    interfaces (async engine <-> sync Streamlit re-run model).
 Why: Streamlit re-runs the entire script on every widget interaction.
     Async operations must be hidden behind simple method calls that
     schedule coroutines on a background event loop.  The bridge also
@@ -22,20 +23,20 @@ from typing import Any
 from app.core.dispatcher import EventDispatcher
 from app.core.manager import RealtimeManager
 from app.models.config import AppSettings, RealtimeConfig
-from app.models.enums import ConnectionState
+from app.models.enums import AgentSpeakingState, ConnectionState, MicState
 from app.models.events import (
-    ConversationItemCreate,
     ConversationItemTranscriptionCompleted,
     ErrorEvent,
     InputAudioBufferAppend,
     InputAudioBufferClear,
     InputAudioBufferCommit,
     ResponseAudioDelta,
+    ResponseAudioDone,
     ResponseAudioTranscriptDelta,
     ResponseAudioTranscriptDone,
     ResponseCreate,
-    ResponseTextDelta,
-    ResponseTextDone,
+    ResponseCreatedEvent,
+    ResponseDoneEvent,
     _ServerBase,
 )
 from app.utils.audio import AudioBuffer
@@ -44,13 +45,14 @@ logger = logging.getLogger(__name__)
 
 
 class VoiceAgentBridge:
-    """Adapter layer that the Streamlit UI interacts with.
+    """Adapter layer that the Streamlit UI interacts with (voice-only).
 
     Manages:
     - A background asyncio event loop (in a daemon thread)
     - The RealtimeManager singleton
     - An AudioBuffer for playback data
-    - Transcript accumulation for the UI
+    - Mic and agent speaking state for the split-screen UI
+    - Transcript accumulation (read-only in the UI)
 
     All public methods are synchronous and safe to call from Streamlit.
     """
@@ -63,9 +65,14 @@ class VoiceAgentBridge:
 
         # Transcript state (written by async handlers, read by Streamlit)
         self._lock = threading.Lock()
-        self._transcript_parts: list[dict[str, str]] = []
+        self._user_transcript: list[str] = []
+        self._agent_transcript: list[str] = []
         self._assistant_text_buffer: str = ""
         self._errors: list[str] = []
+
+        # Voice UX states
+        self._mic_state = MicState.IDLE
+        self._agent_state = AgentSpeakingState.IDLE
 
     # -- Event loop management -----------------------------------------------
 
@@ -103,6 +110,9 @@ class VoiceAgentBridge:
         """Disconnect from the API."""
         if self._manager:
             self._run_coro(self._manager.disconnect())
+        with self._lock:
+            self._mic_state = MicState.IDLE
+            self._agent_state = AgentSpeakingState.IDLE
 
     @property
     def connection_state(self) -> ConnectionState:
@@ -122,6 +132,25 @@ class VoiceAgentBridge:
             return self._manager.last_event_time
         return 0.0
 
+    # -- Mic state -----------------------------------------------------------
+
+    @property
+    def mic_state(self) -> MicState:
+        with self._lock:
+            return self._mic_state
+
+    @mic_state.setter
+    def mic_state(self, value: MicState) -> None:
+        with self._lock:
+            self._mic_state = value
+
+    # -- Agent speaking state ------------------------------------------------
+
+    @property
+    def agent_state(self) -> AgentSpeakingState:
+        with self._lock:
+            return self._agent_state
+
     # -- Audio ---------------------------------------------------------------
 
     @property
@@ -136,9 +165,15 @@ class VoiceAgentBridge:
         self._run_coro(self._manager.send(event))
 
     def commit_audio(self) -> None:
-        """Commit the audio buffer and request a response."""
+        """Commit the audio buffer and request a response.
+
+        Transitions: mic -> SENDING, agent -> THINKING.
+        """
         if not self._manager:
             return
+        with self._lock:
+            self._mic_state = MicState.SENDING
+            self._agent_state = AgentSpeakingState.THINKING
         self._run_coro(self._manager.send(InputAudioBufferCommit()))
         self._run_coro(self._manager.send(ResponseCreate()))
 
@@ -148,31 +183,19 @@ class VoiceAgentBridge:
             return
         self._run_coro(self._manager.send(InputAudioBufferClear()))
 
-    # -- Text / Demo mode ----------------------------------------------------
-
-    def send_text_message(self, text: str) -> None:
-        """Send a text message (demo mode — no microphone needed)."""
-        if not self._manager:
-            return
-        with self._lock:
-            self._transcript_parts.append({"role": "user", "text": text})
-
-        item_event = ConversationItemCreate(
-            item={
-                "type": "message",
-                "role": "user",
-                "content": [{"type": "input_text", "text": text}],
-            }
-        )
-        self._run_coro(self._manager.send(item_event))
-        self._run_coro(self._manager.send(ResponseCreate()))
-
-    # -- Transcript ----------------------------------------------------------
+    # -- Transcript (read-only) ----------------------------------------------
 
     @property
-    def transcript(self) -> list[dict[str, str]]:
+    def user_transcript(self) -> list[str]:
+        """Last N user utterances (read-only in UI)."""
         with self._lock:
-            return list(self._transcript_parts)
+            return list(self._user_transcript)
+
+    @property
+    def agent_transcript(self) -> list[str]:
+        """Last N agent responses (read-only in UI)."""
+        with self._lock:
+            return list(self._agent_transcript)
 
     @property
     def errors(self) -> list[str]:
@@ -181,7 +204,8 @@ class VoiceAgentBridge:
 
     def clear_transcript(self) -> None:
         with self._lock:
-            self._transcript_parts.clear()
+            self._user_transcript.clear()
+            self._agent_transcript.clear()
             self._assistant_text_buffer = ""
             self._errors.clear()
 
@@ -190,10 +214,11 @@ class VoiceAgentBridge:
     def _register_handlers(self, dispatcher: EventDispatcher) -> None:
         """Wire up event handlers for audio, transcript, and error events."""
         dispatcher.register("response.audio.delta", self._on_audio_delta)
+        dispatcher.register("response.audio.done", self._on_audio_done)
         dispatcher.register("response.audio_transcript.delta", self._on_transcript_delta)
         dispatcher.register("response.audio_transcript.done", self._on_transcript_done)
-        dispatcher.register("response.text.delta", self._on_text_delta)
-        dispatcher.register("response.text.done", self._on_text_done)
+        dispatcher.register("response.created", self._on_response_created)
+        dispatcher.register("response.done", self._on_response_done)
         dispatcher.register(
             "conversation.item.input_audio_transcription.completed",
             self._on_user_transcription,
@@ -201,10 +226,35 @@ class VoiceAgentBridge:
         dispatcher.register("error", self._on_error)
 
     async def _on_audio_delta(self, event: _ServerBase) -> None:
-        """Decode audio delta and push into the playback buffer."""
+        """Decode audio delta and push into the playback buffer.
+
+        Transitions agent state to SPEAKING on the first delta.
+        """
         assert isinstance(event, ResponseAudioDelta)
         pcm = event.decode_audio()
         self._audio_buffer.append(pcm)
+        with self._lock:
+            if self._agent_state != AgentSpeakingState.SPEAKING:
+                self._agent_state = AgentSpeakingState.SPEAKING
+
+    async def _on_audio_done(self, event: _ServerBase) -> None:
+        """Audio stream complete for this response part."""
+        assert isinstance(event, ResponseAudioDone)
+        # Agent will go IDLE when response.done fires
+
+    async def _on_response_created(self, event: _ServerBase) -> None:
+        """Server acknowledged it is generating a response."""
+        assert isinstance(event, ResponseCreatedEvent)
+        with self._lock:
+            self._mic_state = MicState.IDLE
+            if self._agent_state == AgentSpeakingState.IDLE:
+                self._agent_state = AgentSpeakingState.THINKING
+
+    async def _on_response_done(self, event: _ServerBase) -> None:
+        """Response generation complete — agent goes idle."""
+        assert isinstance(event, ResponseDoneEvent)
+        with self._lock:
+            self._agent_state = AgentSpeakingState.IDLE
 
     async def _on_transcript_delta(self, event: _ServerBase) -> None:
         """Accumulate assistant audio-transcript deltas."""
@@ -218,30 +268,19 @@ class VoiceAgentBridge:
         with self._lock:
             text = event.transcript or self._assistant_text_buffer
             if text.strip():
-                self._transcript_parts.append({"role": "assistant", "text": text})
-            self._assistant_text_buffer = ""
-
-    async def _on_text_delta(self, event: _ServerBase) -> None:
-        """Accumulate assistant text deltas (text-only mode)."""
-        assert isinstance(event, ResponseTextDelta)
-        with self._lock:
-            self._assistant_text_buffer += event.delta
-
-    async def _on_text_done(self, event: _ServerBase) -> None:
-        """Finalize assistant text turn."""
-        assert isinstance(event, ResponseTextDone)
-        with self._lock:
-            text = event.text or self._assistant_text_buffer
-            if text.strip():
-                self._transcript_parts.append({"role": "assistant", "text": text})
+                self._agent_transcript.append(text)
+                if len(self._agent_transcript) > 50:
+                    self._agent_transcript = self._agent_transcript[-50:]
             self._assistant_text_buffer = ""
 
     async def _on_user_transcription(self, event: _ServerBase) -> None:
-        """Add the user's speech transcription to the transcript."""
+        """Add the user's speech transcription to the user transcript."""
         assert isinstance(event, ConversationItemTranscriptionCompleted)
         with self._lock:
             if event.transcript.strip():
-                self._transcript_parts.append({"role": "user", "text": event.transcript})
+                self._user_transcript.append(event.transcript)
+                if len(self._user_transcript) > 50:
+                    self._user_transcript = self._user_transcript[-50:]
 
     async def _on_error(self, event: _ServerBase) -> None:
         """Log and surface errors."""

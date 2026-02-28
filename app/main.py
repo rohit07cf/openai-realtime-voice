@@ -1,11 +1,15 @@
-"""Streamlit entrypoint for the OpenAI Realtime Voice Agent.
+"""Streamlit entrypoint for the OpenAI Realtime Voice Agent (Voice-Only).
 
 Run with:
     streamlit run app/main.py
 
-This module wires together the UI components and the VoiceAgentBridge.
+This module wires together the split-screen UI and the VoiceAgentBridge.
 It contains *zero* WebSocket or audio logic — all of that lives behind
 the bridge adapter.
+
+Layout:
+    LEFT column  = USER panel  (mic button, user transcript)
+    RIGHT column = AGENT panel (avatar, agent status, agent transcript)
 """
 
 from __future__ import annotations
@@ -13,16 +17,16 @@ from __future__ import annotations
 import streamlit as st
 
 from app.models.config import AppSettings, RealtimeConfig, TurnDetectionConfig
-from app.models.enums import ConnectionState, Modality, Voice
+from app.models.enums import ConnectionState, MicState, Modality, Voice
 from app.ui.bridge import VoiceAgentBridge
 from app.ui.components import (
+    render_agent_panel,
     render_audio_status,
     render_connection_controls,
     render_debug_log,
-    render_demo_input,
     render_errors,
     render_sidebar_config,
-    render_transcript,
+    render_user_panel,
 )
 from app.utils.logging import setup_logging
 
@@ -54,7 +58,7 @@ cfg = render_sidebar_config()
 # Header
 # ---------------------------------------------------------------------------
 st.title("OpenAI Realtime Voice Agent")
-st.caption("Production-ready voice agent powered by OpenAI's Realtime API")
+st.caption("Voice-only interaction — press the mic button to speak")
 
 # ---------------------------------------------------------------------------
 # Connection controls
@@ -91,31 +95,51 @@ if disconnect_clicked:
     st.rerun()
 
 # ---------------------------------------------------------------------------
-# Main content area
+# Split-screen: USER (left) | AGENT (right)
 # ---------------------------------------------------------------------------
-col_main, col_side = st.columns([3, 1])
+col_user, col_agent = st.columns(2)
 
-with col_main:
-    # Transcript
-    render_transcript(bridge.transcript)
+is_connected = bridge.connection_state == ConnectionState.CONNECTED
 
-    # Demo mode text input
-    text = render_demo_input()
-    if text and bridge.connection_state == ConnectionState.CONNECTED:
-        bridge.send_text_message(text)
+with col_user:
+    mic_clicked = render_user_panel(
+        mic_state=bridge.mic_state,
+        user_transcript=bridge.user_transcript,
+        is_connected=is_connected,
+    )
+
+with col_agent:
+    render_agent_panel(
+        agent_state=bridge.agent_state,
+        agent_transcript=bridge.agent_transcript,
+        buffer_depth_sec=bridge.audio_buffer.depth_seconds,
+    )
+
+# ---------------------------------------------------------------------------
+# Mic button logic (push-to-talk toggle)
+# ---------------------------------------------------------------------------
+if mic_clicked and is_connected:
+    if bridge.mic_state == MicState.IDLE:
+        # Start recording
+        bridge.mic_state = MicState.RECORDING
         st.rerun()
-    elif text and bridge.connection_state != ConnectionState.CONNECTED:
-        st.warning("Please connect first.")
+    elif bridge.mic_state == MicState.RECORDING:
+        # Stop recording -> commit audio -> request response
+        bridge.commit_audio()
+        st.rerun()
 
-with col_side:
-    # Audio status
+# ---------------------------------------------------------------------------
+# Footer: audio status + debug log
+# ---------------------------------------------------------------------------
+st.divider()
+footer_left, footer_right = st.columns(2)
+with footer_left:
     render_audio_status(
         buffer_depth_sec=bridge.audio_buffer.depth_seconds,
         last_event_time=bridge.last_event_time,
     )
-    # Errors
+with footer_right:
     render_errors(bridge.errors)
-    # Debug log
     render_debug_log(bridge.event_log)
 
 # ---------------------------------------------------------------------------

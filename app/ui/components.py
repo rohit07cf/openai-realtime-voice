@@ -1,7 +1,8 @@
-"""Streamlit UI components for the Realtime Voice Agent.
+"""Streamlit UI components for the split-screen Voice-Only Agent.
 
-Responsibility: Render all visual elements — config sidebar, transcript,
-    audio status, debug log — using data from the VoiceAgentBridge.
+Responsibility: Render all visual elements — sidebar config, user panel
+    (mic button + transcript), agent panel (avatar + transcript), and
+    status / debug displays.  No text-input chat fields exist.
 Pattern: Presentational components — each function receives data and
     renders it; none contain WebSocket or audio logic.
 Why: Keeping rendering separate from state management makes the UI
@@ -15,7 +16,19 @@ from typing import Any
 
 import streamlit as st
 
-from app.models.enums import ConnectionState, Modality, Voice
+from app.models.enums import AgentSpeakingState, ConnectionState, MicState, Modality, Voice
+
+# ---------------------------------------------------------------------------
+# Default avatar placeholder (inline SVG data URI)
+# ---------------------------------------------------------------------------
+_DEFAULT_AVATAR_SVG = (
+    "data:image/svg+xml;utf8,"
+    "<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'>"
+    "<rect width='120' height='120' rx='60' fill='%234F46E5'/>"
+    "<text x='50%25' y='54%25' text-anchor='middle' dominant-baseline='middle' "
+    "font-family='sans-serif' font-size='48' fill='white'>AI</text>"
+    "</svg>"
+)
 
 
 def render_sidebar_config() -> dict[str, Any]:
@@ -71,9 +84,9 @@ def render_sidebar_config() -> dict[str, Any]:
     st.sidebar.subheader("Turn Detection")
     turn_mode = st.sidebar.selectbox(
         "Mode",
-        options=["server_vad", "semantic_vad", "manual"],
+        options=["manual", "server_vad", "semantic_vad"],
         index=0,
-        help="'manual' disables auto turn detection (push-to-talk).",
+        help="'manual' = push-to-talk (recommended). VAD modes auto-detect speech.",
     )
 
     turn_config = None
@@ -87,6 +100,16 @@ def render_sidebar_config() -> dict[str, Any]:
             "silence_duration_ms": silence_ms,
             "prefix_padding_ms": prefix_ms,
         }
+
+    # Agent avatar upload
+    st.sidebar.subheader("Agent Avatar")
+    uploaded = st.sidebar.file_uploader(
+        "Upload avatar image",
+        type=["png", "jpg", "jpeg", "webp"],
+        help="Displayed in the Agent panel. Optional.",
+    )
+    if uploaded is not None:
+        st.session_state["agent_avatar"] = uploaded.getvalue()
 
     return {
         "api_key": api_key,
@@ -128,37 +151,113 @@ def render_connection_controls(state: ConnectionState) -> tuple[bool, bool]:
     return connect, disconnect
 
 
-def render_transcript(messages: list[dict[str, str]]) -> None:
-    """Render the conversation transcript."""
-    st.subheader("Conversation")
-    container = st.container(height=400)
-    with container:
-        if not messages:
-            st.caption("No messages yet. Connect and start talking or use Demo Mode.")
-        for msg in messages:
-            role = msg["role"]
-            text = msg["text"]
-            if role == "user":
-                st.chat_message("user").write(text)
-            else:
-                st.chat_message("assistant").write(text)
+# ---------------------------------------------------------------------------
+# Split-screen panels
+# ---------------------------------------------------------------------------
 
 
-def render_demo_input() -> str | None:
-    """Render text input for demo mode (no mic)."""
-    st.subheader("Demo Mode (Text Input)")
-    st.caption("Send text messages to test the agent without a microphone.")
-    with st.form("demo_form", clear_on_submit=True):
-        text = st.text_input("Your message", placeholder="Type something...")
-        submitted = st.form_submit_button("Send", type="primary")
-    if submitted and text.strip():
-        return text.strip()
-    return None
+def render_user_panel(
+    mic_state: MicState,
+    user_transcript: list[str],
+    is_connected: bool,
+) -> bool:
+    """Render the USER (left) panel.
+
+    Contains:
+    - "USER" header
+    - Mic button (push-to-talk toggle)
+    - Mic status indicator
+    - Read-only transcript window
+
+    Returns True if the mic button was clicked.
+    """
+    st.markdown("### 🎙 USER")
+
+    # Mic status indicator
+    mic_labels = {
+        MicState.IDLE: ("⚪ Idle", "secondary"),
+        MicState.RECORDING: ("🔴 Recording...", "primary"),
+        MicState.SENDING: ("🟡 Sending...", "secondary"),
+    }
+    label, _ = mic_labels.get(mic_state, ("⚪ Idle", "secondary"))
+    st.caption(f"Mic status: **{label}**")
+
+    # Mic button
+    if mic_state == MicState.RECORDING:
+        btn_label = "⏹ Stop & Send"
+        btn_type = "primary"
+    else:
+        btn_label = "🎤 Push to Talk"
+        btn_type = "primary"
+
+    mic_clicked = st.button(
+        btn_label,
+        disabled=not is_connected or mic_state == MicState.SENDING,
+        type=btn_type,
+        use_container_width=True,
+        key="mic_button",
+    )
+
+    # Read-only transcript
+    st.markdown("**Your utterances:**")
+    transcript_container = st.container(height=280)
+    with transcript_container:
+        if not user_transcript:
+            st.caption("Speak into your microphone to see transcripts here.")
+        else:
+            for utterance in user_transcript:
+                st.markdown(f"> {utterance}")
+
+    return mic_clicked
+
+
+def render_agent_panel(
+    agent_state: AgentSpeakingState,
+    agent_transcript: list[str],
+    buffer_depth_sec: float,
+) -> None:
+    """Render the AGENT (right) panel.
+
+    Contains:
+    - "AGENT" header
+    - Agent avatar image
+    - Agent speaking status indicator
+    - Read-only transcript window
+    """
+    st.markdown("### 🤖 AGENT")
+
+    # Agent avatar
+    avatar_bytes = st.session_state.get("agent_avatar")
+    if avatar_bytes:
+        st.image(avatar_bytes, width=100)
+    else:
+        st.image(_DEFAULT_AVATAR_SVG, width=100)
+
+    # Speaking status indicator
+    agent_labels = {
+        AgentSpeakingState.IDLE: "⚪ Idle",
+        AgentSpeakingState.THINKING: "🟡 Thinking...",
+        AgentSpeakingState.SPEAKING: "🟢 Speaking...",
+    }
+    status_text = agent_labels.get(agent_state, "⚪ Idle")
+    st.caption(f"Agent status: **{status_text}**")
+
+    if buffer_depth_sec > 0:
+        st.caption(f"Audio buffer: {buffer_depth_sec:.2f}s")
+
+    # Read-only transcript
+    st.markdown("**Agent responses:**")
+    transcript_container = st.container(height=280)
+    with transcript_container:
+        if not agent_transcript:
+            st.caption("Agent responses will appear here.")
+        else:
+            for response in agent_transcript:
+                st.markdown(f"💬 {response}")
 
 
 def render_audio_status(buffer_depth_sec: float, last_event_time: float) -> None:
     """Render audio pipeline status metrics."""
-    st.subheader("Audio Status")
     col1, col2 = st.columns(2)
     with col1:
         st.metric("Buffer Depth", f"{buffer_depth_sec:.2f}s")

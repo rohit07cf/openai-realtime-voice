@@ -41,7 +41,13 @@ class RealtimeConnection:
 
     @property
     def is_open(self) -> bool:
-        return self._ws is not None
+        """True only if the WebSocket exists and is not already closed."""
+        if self._ws is None:
+            return False
+        try:
+            return self._ws.state.name == "OPEN"
+        except Exception:
+            return self._ws is not None
 
     async def connect(self) -> None:
         """Open a WebSocket to the OpenAI Realtime endpoint."""

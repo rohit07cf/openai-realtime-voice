@@ -142,11 +142,19 @@ class RealtimeManager:
         self._circuit.record_success()
         self._state = ConnectionState.CONNECTED
 
-        # Send session configuration
-        await self._send_session_update()
-
-        # Start background receive loop
+        # Start background receive loop first (so we can receive errors)
         self._receive_task = asyncio.create_task(self._receive_loop())
+
+        # Send session configuration — may fail if the server rejects
+        # the key/model during the handshake (close code 3000).
+        try:
+            await self._send_session_update()
+        except Exception as exc:
+            logger.error("Session update failed: %s", exc)
+            self._circuit.record_failure()
+            await self.disconnect()
+            return False
+
         return True
 
     async def disconnect(self) -> None:

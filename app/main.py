@@ -125,6 +125,11 @@ with col_agent:
         buffer_depth_sec=bridge.audio_buffer.depth_seconds,
     )
 
+    # Play agent audio when a response is complete
+    playback = bridge.get_playback_audio()
+    if playback:
+        st.audio(playback, format="audio/wav", autoplay=True)
+
 # ---------------------------------------------------------------------------
 # Process new audio recording (deduplicate across Streamlit reruns)
 # ---------------------------------------------------------------------------

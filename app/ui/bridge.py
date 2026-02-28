@@ -25,6 +25,7 @@ from app.core.manager import RealtimeManager
 from app.models.config import AppSettings, RealtimeConfig
 from app.models.enums import AgentSpeakingState, ConnectionState, MicState
 from app.models.events import (
+    ConversationItemCreate,
     ConversationItemTranscriptionCompleted,
     ErrorEvent,
     InputAudioBufferAppend,
@@ -74,6 +75,10 @@ class VoiceAgentBridge:
         self._mic_state = MicState.IDLE
         self._agent_state = AgentSpeakingState.IDLE
 
+        # Playback: accumulate response audio, then convert to WAV
+        self._response_audio_chunks: list[bytes] = []
+        self._playback_audio: bytes | None = None
+
     # -- Event loop management -----------------------------------------------
 
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
@@ -113,6 +118,8 @@ class VoiceAgentBridge:
         with self._lock:
             self._mic_state = MicState.IDLE
             self._agent_state = AgentSpeakingState.IDLE
+            self._response_audio_chunks.clear()
+            self._playback_audio = None
 
     @property
     def connection_state(self) -> ConnectionState:
@@ -178,22 +185,39 @@ class VoiceAgentBridge:
         self._run_coro(self._manager.send(ResponseCreate()))
 
     def send_wav_audio(self, wav_bytes: bytes) -> None:
-        """Decode WAV, send PCM16 chunks to OpenAI, and commit for response.
+        """Decode WAV, create a user audio conversation item, and request a response.
 
-        This is the main entry-point used by ``st.audio_input``'s push-to-talk
-        flow: the browser records a complete WAV clip, we resample to 24 kHz
-        PCM16, stream it to the server, then commit.
+        Uses ``conversation.item.create`` to send the entire recording as a
+        single conversation item.  This bypasses the streaming input buffer
+        (and server-side VAD) so the audio is never fragmented — fixing the
+        garbled-transcription issue that occurs when batch-sent audio is
+        split by ``server_vad``.
         """
-        from app.utils.audio import SAMPLE_RATE, SAMPLE_WIDTH, wav_bytes_to_pcm16_24k
+        import base64 as b64
+
+        from app.utils.audio import wav_bytes_to_pcm16_24k
+
+        if not self._manager:
+            return
 
         pcm = wav_bytes_to_pcm16_24k(wav_bytes)
+        audio_b64 = b64.b64encode(pcm).decode("ascii")
 
-        # Stream in ~200 ms chunks to avoid oversized WebSocket frames
-        chunk_size = int(SAMPLE_RATE * SAMPLE_WIDTH * 0.2)  # 9 600 bytes
-        for i in range(0, len(pcm), chunk_size):
-            self.send_audio_chunk(pcm[i : i + chunk_size])
+        # Create a complete user audio item (bypasses streaming buffer / VAD)
+        item_event = ConversationItemCreate(
+            item={
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_audio", "audio": audio_b64}],
+            }
+        )
+        self._run_coro(self._manager.send(item_event))
 
-        self.commit_audio()
+        # Set state and request response
+        with self._lock:
+            self._mic_state = MicState.SENDING
+            self._agent_state = AgentSpeakingState.THINKING
+        self._run_coro(self._manager.send(ResponseCreate()))
 
     def clear_audio_input(self) -> None:
         """Clear the server-side input audio buffer."""
@@ -243,6 +267,17 @@ class VoiceAgentBridge:
         )
         dispatcher.register("error", self._on_error)
 
+    def get_playback_audio(self) -> bytes | None:
+        """Return accumulated agent audio as WAV bytes (and clear it).
+
+        Called by the UI layer to feed ``st.audio(autoplay=True)``.
+        Returns ``None`` when no new audio is available.
+        """
+        with self._lock:
+            audio = self._playback_audio
+            self._playback_audio = None
+            return audio
+
     async def _on_audio_delta(self, event: _ServerBase) -> None:
         """Decode audio delta and push into the playback buffer.
 
@@ -252,6 +287,7 @@ class VoiceAgentBridge:
         pcm = event.decode_audio()
         self._audio_buffer.append(pcm)
         with self._lock:
+            self._response_audio_chunks.append(pcm)
             if self._agent_state != AgentSpeakingState.SPEAKING:
                 self._agent_state = AgentSpeakingState.SPEAKING
 
@@ -269,10 +305,16 @@ class VoiceAgentBridge:
                 self._agent_state = AgentSpeakingState.THINKING
 
     async def _on_response_done(self, event: _ServerBase) -> None:
-        """Response generation complete — agent goes idle."""
+        """Response generation complete — build playback WAV, agent goes idle."""
         assert isinstance(event, ResponseDoneEvent)
         with self._lock:
             self._agent_state = AgentSpeakingState.IDLE
+            if self._response_audio_chunks:
+                all_pcm = b"".join(self._response_audio_chunks)
+                self._response_audio_chunks.clear()
+                from app.utils.audio import pcm16_to_wav_bytes
+
+                self._playback_audio = pcm16_to_wav_bytes(all_pcm)
 
     async def _on_transcript_delta(self, event: _ServerBase) -> None:
         """Accumulate assistant audio-transcript deltas."""

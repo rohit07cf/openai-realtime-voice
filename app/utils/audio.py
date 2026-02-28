@@ -138,3 +138,46 @@ def float32_to_pcm16(samples: np.ndarray) -> bytes:
 def encode_pcm16_to_base64(pcm_bytes: bytes) -> str:
     """Encode raw PCM16 bytes for ``input_audio_buffer.append``."""
     return base64.b64encode(pcm_bytes).decode("ascii")
+
+
+def wav_bytes_to_pcm16_24k(wav_bytes: bytes) -> bytes:
+    """Convert WAV audio bytes to PCM16 24 kHz mono for the OpenAI Realtime API.
+
+    Handles arbitrary sample rates, channel counts, and bit depths
+    coming from the browser's ``st.audio_input`` widget.
+    """
+    import io
+    import wave
+
+    with io.BytesIO(wav_bytes) as buf:
+        with wave.open(buf, "rb") as wf:
+            raw_frames = wf.readframes(wf.getnframes())
+            src_rate = wf.getframerate()
+            src_channels = wf.getnchannels()
+            src_width = wf.getsampwidth()
+
+    # Decode raw frames to int16
+    if src_width == 2:
+        samples = np.frombuffer(raw_frames, dtype=np.int16)
+    elif src_width == 4:
+        samples = (np.frombuffer(raw_frames, dtype=np.int32) >> 16).astype(np.int16)
+    elif src_width == 1:
+        samples = ((np.frombuffer(raw_frames, dtype=np.uint8).astype(np.int16) - 128) * 256).astype(
+            np.int16
+        )
+    else:
+        raise ValueError(f"Unsupported WAV sample width: {src_width}")
+
+    # Mix to mono
+    if src_channels > 1:
+        samples = samples.reshape(-1, src_channels).mean(axis=1).astype(np.int16)
+
+    # Resample to 24 kHz
+    if src_rate != SAMPLE_RATE:
+        float_samples = samples.astype(np.float32)
+        new_length = int(len(float_samples) * SAMPLE_RATE / src_rate)
+        indices = np.linspace(0, len(float_samples) - 1, new_length)
+        resampled = np.interp(indices, np.arange(len(float_samples)), float_samples)
+        samples = resampled.astype(np.int16)
+
+    return samples.tobytes()

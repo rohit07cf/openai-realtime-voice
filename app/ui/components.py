@@ -35,14 +35,10 @@ def render_sidebar_config() -> dict[str, Any]:
     """Render the configuration sidebar and return validated settings.
 
     Returns a dict with keys matching RealtimeConfig fields.
+    The OpenAI API key is loaded from the environment (OPENAI_API_KEY)
+    or a ``.env`` file — it is **not** entered in the sidebar.
     """
     st.sidebar.header("Session Configuration")
-
-    api_key = st.sidebar.text_input(
-        "OpenAI API Key",
-        type="password",
-        help="Required. Your OpenAI API key with Realtime access.",
-    )
 
     model = st.sidebar.selectbox(
         "Model",
@@ -112,7 +108,6 @@ def render_sidebar_config() -> dict[str, Any]:
         st.session_state["agent_avatar"] = uploaded.getvalue()
 
     return {
-        "api_key": api_key,
         "model": model,
         "voice": voice,
         "modalities": modality_options or ["text", "audio"],
@@ -160,42 +155,33 @@ def render_user_panel(
     mic_state: MicState,
     user_transcript: list[str],
     is_connected: bool,
-) -> bool:
-    """Render the USER (left) panel.
+) -> Any:
+    """Render the USER (left) panel with ``st.audio_input`` for push-to-talk.
 
     Contains:
     - "USER" header
-    - Mic button (push-to-talk toggle)
+    - ``st.audio_input`` widget (browser mic capture)
     - Mic status indicator
     - Read-only transcript window
 
-    Returns True if the mic button was clicked.
+    Returns the recorded audio (``UploadedFile``) or ``None``.
     """
     st.markdown("### 🎙 USER")
 
     # Mic status indicator
     mic_labels = {
-        MicState.IDLE: ("⚪ Idle", "secondary"),
+        MicState.IDLE: ("⚪ Ready", "secondary"),
         MicState.RECORDING: ("🔴 Recording...", "primary"),
         MicState.SENDING: ("🟡 Sending...", "secondary"),
     }
-    label, _ = mic_labels.get(mic_state, ("⚪ Idle", "secondary"))
+    label, _ = mic_labels.get(mic_state, ("⚪ Ready", "secondary"))
     st.caption(f"Mic status: **{label}**")
 
-    # Mic button
-    if mic_state == MicState.RECORDING:
-        btn_label = "⏹ Stop & Send"
-        btn_type = "primary"
-    else:
-        btn_label = "🎤 Push to Talk"
-        btn_type = "primary"
-
-    mic_clicked = st.button(
-        btn_label,
-        disabled=not is_connected or mic_state == MicState.SENDING,
-        type=btn_type,
-        use_container_width=True,
-        key="mic_button",
+    # Audio input — browser-native microphone capture
+    audio_data = st.audio_input(
+        "🎤 Push to Talk",
+        key="mic_input",
+        disabled=not is_connected,
     )
 
     # Read-only transcript
@@ -208,7 +194,7 @@ def render_user_panel(
             for utterance in user_transcript:
                 st.markdown(f"> {utterance}")
 
-    return mic_clicked
+    return audio_data
 
 
 def render_agent_panel(

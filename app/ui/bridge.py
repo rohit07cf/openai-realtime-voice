@@ -177,6 +177,24 @@ class VoiceAgentBridge:
         self._run_coro(self._manager.send(InputAudioBufferCommit()))
         self._run_coro(self._manager.send(ResponseCreate()))
 
+    def send_wav_audio(self, wav_bytes: bytes) -> None:
+        """Decode WAV, send PCM16 chunks to OpenAI, and commit for response.
+
+        This is the main entry-point used by ``st.audio_input``'s push-to-talk
+        flow: the browser records a complete WAV clip, we resample to 24 kHz
+        PCM16, stream it to the server, then commit.
+        """
+        from app.utils.audio import SAMPLE_RATE, SAMPLE_WIDTH, wav_bytes_to_pcm16_24k
+
+        pcm = wav_bytes_to_pcm16_24k(wav_bytes)
+
+        # Stream in ~200 ms chunks to avoid oversized WebSocket frames
+        chunk_size = int(SAMPLE_RATE * SAMPLE_WIDTH * 0.2)  # 9 600 bytes
+        for i in range(0, len(pcm), chunk_size):
+            self.send_audio_chunk(pcm[i : i + chunk_size])
+
+        self.commit_audio()
+
     def clear_audio_input(self) -> None:
         """Clear the server-side input audio buffer."""
         if not self._manager:

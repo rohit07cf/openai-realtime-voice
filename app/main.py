@@ -8,16 +8,18 @@ It contains *zero* WebSocket or audio logic — all of that lives behind
 the bridge adapter.
 
 Layout:
-    LEFT column  = USER panel  (mic button, user transcript)
+    LEFT column  = USER panel  (audio input, user transcript)
     RIGHT column = AGENT panel (avatar, agent status, agent transcript)
 """
 
 from __future__ import annotations
 
+import logging
+
 import streamlit as st
 
 from app.models.config import AppSettings, RealtimeConfig, TurnDetectionConfig
-from app.models.enums import ConnectionState, MicState, Modality, Voice
+from app.models.enums import ConnectionState, Modality, Voice
 from app.ui.bridge import VoiceAgentBridge
 from app.ui.components import (
     render_agent_panel,
@@ -29,6 +31,8 @@ from app.ui.components import (
     render_user_panel,
 )
 from app.utils.logging import setup_logging
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Page config
@@ -50,7 +54,7 @@ if "bridge" not in st.session_state:
 bridge: VoiceAgentBridge = st.session_state.bridge
 
 # ---------------------------------------------------------------------------
-# Sidebar — configuration panel
+# Sidebar — configuration panel (API key loaded from env / .env)
 # ---------------------------------------------------------------------------
 cfg = render_sidebar_config()
 
@@ -58,7 +62,7 @@ cfg = render_sidebar_config()
 # Header
 # ---------------------------------------------------------------------------
 st.title("OpenAI Realtime Voice Agent")
-st.caption("Voice-only interaction — press the mic button to speak")
+st.caption("Voice-only interaction — record a message and it will be sent to the agent")
 
 # ---------------------------------------------------------------------------
 # Connection controls
@@ -66,11 +70,16 @@ st.caption("Voice-only interaction — press the mic button to speak")
 connect_clicked, disconnect_clicked = render_connection_controls(bridge.connection_state)
 
 if connect_clicked:
-    api_key = cfg["api_key"]
-    if not api_key:
-        st.error("Please enter your OpenAI API key in the sidebar.")
-    else:
-        settings = AppSettings(openai_api_key=api_key)
+    try:
+        settings = AppSettings()
+    except Exception:
+        st.error(
+            "**OPENAI_API_KEY** is not configured. "
+            "Set it as an environment variable or in a `.env` file."
+        )
+        settings = None
+
+    if settings is not None:
         turn_detection = None
         if cfg["turn_detection"]:
             turn_detection = TurnDetectionConfig(**cfg["turn_detection"])
@@ -92,6 +101,7 @@ if connect_clicked:
 
 if disconnect_clicked:
     bridge.disconnect()
+    st.session_state.pop("_last_audio_bytes", None)
     st.rerun()
 
 # ---------------------------------------------------------------------------
@@ -102,7 +112,7 @@ col_user, col_agent = st.columns(2)
 is_connected = bridge.connection_state == ConnectionState.CONNECTED
 
 with col_user:
-    mic_clicked = render_user_panel(
+    audio_data = render_user_panel(
         mic_state=bridge.mic_state,
         user_transcript=bridge.user_transcript,
         is_connected=is_connected,
@@ -116,16 +126,18 @@ with col_agent:
     )
 
 # ---------------------------------------------------------------------------
-# Mic button logic (push-to-talk toggle)
+# Process new audio recording (deduplicate across Streamlit reruns)
 # ---------------------------------------------------------------------------
-if mic_clicked and is_connected:
-    if bridge.mic_state == MicState.IDLE:
-        # Start recording
-        bridge.mic_state = MicState.RECORDING
-        st.rerun()
-    elif bridge.mic_state == MicState.RECORDING:
-        # Stop recording -> commit audio -> request response
-        bridge.commit_audio()
+if audio_data is not None and is_connected:
+    audio_bytes = audio_data.getvalue()
+    if audio_bytes != st.session_state.get("_last_audio_bytes"):
+        st.session_state["_last_audio_bytes"] = audio_bytes
+        with st.spinner("Sending audio to agent..."):
+            try:
+                bridge.send_wav_audio(audio_bytes)
+            except Exception:
+                logger.exception("Failed to send audio")
+                st.error("Failed to send audio. Please try again.")
         st.rerun()
 
 # ---------------------------------------------------------------------------

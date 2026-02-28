@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "openai-realtime-voice"
+version = "0.1.0"
+description = "Production-ready OpenAI Realtime Voice Agent with Streamlit UI"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [
+    { name = "Rohit Goswami" },
+]
+
+dependencies = [
+    "streamlit>=1.40.0,<2.0",
+    "pydantic>=2.10.0,<3.0",
+    "pydantic-settings>=2.7.0,<3.0",
+    "websockets>=14.1,<15.0",
+    "numpy>=1.26.0,<3.0",
+]
+
+[project.optional-dependencies]
+webrtc = [
+    "streamlit-webrtc>=0.47.0,<1.0",
+]
+dev = [
+    "pytest>=8.3.0,<9.0",
+    "pytest-asyncio>=0.24.0,<1.0",
+    "ruff>=0.8.0,<1.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["app/tests"]
+asyncio_mode = "auto"
+markers = [
+    "asyncio: mark test as async",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]

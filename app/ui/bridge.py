@@ -1,0 +1,254 @@
+"""VoiceAgentBridge — Adapter between the async engine and Streamlit UI.
+
+Responsibility: Expose a clean, synchronous-friendly API that the
+    Streamlit script can call without importing asyncio, websockets,
+    or Pydantic event internals.
+Pattern: Adapter / Bridge — translates between two incompatible
+    interfaces (async engine ↔ sync Streamlit re-run model).
+Why: Streamlit re-runs the entire script on every widget interaction.
+    Async operations must be hidden behind simple method calls that
+    schedule coroutines on a background event loop.  The bridge also
+    decodes audio deltas into the thread-safe AudioBuffer, keeping the
+    UI layer completely unaware of base64 or PCM16 details.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import threading
+from typing import Any
+
+from app.core.dispatcher import EventDispatcher
+from app.core.manager import RealtimeManager
+from app.models.config import AppSettings, RealtimeConfig
+from app.models.enums import ConnectionState
+from app.models.events import (
+    ConversationItemCreate,
+    ConversationItemTranscriptionCompleted,
+    ErrorEvent,
+    InputAudioBufferAppend,
+    InputAudioBufferClear,
+    InputAudioBufferCommit,
+    ResponseAudioDelta,
+    ResponseAudioTranscriptDelta,
+    ResponseAudioTranscriptDone,
+    ResponseCreate,
+    ResponseTextDelta,
+    ResponseTextDone,
+    _ServerBase,
+)
+from app.utils.audio import AudioBuffer
+
+logger = logging.getLogger(__name__)
+
+
+class VoiceAgentBridge:
+    """Adapter layer that the Streamlit UI interacts with.
+
+    Manages:
+    - A background asyncio event loop (in a daemon thread)
+    - The RealtimeManager singleton
+    - An AudioBuffer for playback data
+    - Transcript accumulation for the UI
+
+    All public methods are synchronous and safe to call from Streamlit.
+    """
+
+    def __init__(self) -> None:
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._manager: RealtimeManager | None = None
+        self._audio_buffer = AudioBuffer()
+
+        # Transcript state (written by async handlers, read by Streamlit)
+        self._lock = threading.Lock()
+        self._transcript_parts: list[dict[str, str]] = []
+        self._assistant_text_buffer: str = ""
+        self._errors: list[str] = []
+
+    # -- Event loop management -----------------------------------------------
+
+    def _ensure_loop(self) -> asyncio.AbstractEventLoop:
+        """Start the background event loop if not already running."""
+        if self._loop is not None and self._loop.is_running():
+            return self._loop
+
+        self._loop = asyncio.new_event_loop()
+
+        def _run(loop: asyncio.AbstractEventLoop) -> None:
+            asyncio.set_event_loop(loop)
+            loop.run_forever()
+
+        self._thread = threading.Thread(target=_run, args=(self._loop,), daemon=True)
+        self._thread.start()
+        return self._loop
+
+    def _run_coro(self, coro: Any) -> Any:
+        """Schedule a coroutine on the background loop and block until done."""
+        loop = self._ensure_loop()
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+        return future.result(timeout=30)
+
+    # -- Connection ----------------------------------------------------------
+
+    def connect(self, settings: AppSettings, config: RealtimeConfig) -> bool:
+        """Connect to OpenAI Realtime API. Returns True on success."""
+        RealtimeManager.reset_singleton()
+        self._manager = RealtimeManager(api_key=settings.openai_api_key, config=config)
+        self._register_handlers(self._manager.dispatcher)
+        return self._run_coro(self._manager.connect())
+
+    def disconnect(self) -> None:
+        """Disconnect from the API."""
+        if self._manager:
+            self._run_coro(self._manager.disconnect())
+
+    @property
+    def connection_state(self) -> ConnectionState:
+        if self._manager:
+            return self._manager.state
+        return ConnectionState.DISCONNECTED
+
+    @property
+    def event_log(self) -> list[dict[str, Any]]:
+        if self._manager:
+            return self._manager.event_log
+        return []
+
+    @property
+    def last_event_time(self) -> float:
+        if self._manager:
+            return self._manager.last_event_time
+        return 0.0
+
+    # -- Audio ---------------------------------------------------------------
+
+    @property
+    def audio_buffer(self) -> AudioBuffer:
+        return self._audio_buffer
+
+    def send_audio_chunk(self, pcm_bytes: bytes) -> None:
+        """Send a chunk of PCM16 audio to the server."""
+        if not self._manager:
+            return
+        event = InputAudioBufferAppend.from_bytes(pcm_bytes)
+        self._run_coro(self._manager.send(event))
+
+    def commit_audio(self) -> None:
+        """Commit the audio buffer and request a response."""
+        if not self._manager:
+            return
+        self._run_coro(self._manager.send(InputAudioBufferCommit()))
+        self._run_coro(self._manager.send(ResponseCreate()))
+
+    def clear_audio_input(self) -> None:
+        """Clear the server-side input audio buffer."""
+        if not self._manager:
+            return
+        self._run_coro(self._manager.send(InputAudioBufferClear()))
+
+    # -- Text / Demo mode ----------------------------------------------------
+
+    def send_text_message(self, text: str) -> None:
+        """Send a text message (demo mode — no microphone needed)."""
+        if not self._manager:
+            return
+        with self._lock:
+            self._transcript_parts.append({"role": "user", "text": text})
+
+        item_event = ConversationItemCreate(
+            item={
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": text}],
+            }
+        )
+        self._run_coro(self._manager.send(item_event))
+        self._run_coro(self._manager.send(ResponseCreate()))
+
+    # -- Transcript ----------------------------------------------------------
+
+    @property
+    def transcript(self) -> list[dict[str, str]]:
+        with self._lock:
+            return list(self._transcript_parts)
+
+    @property
+    def errors(self) -> list[str]:
+        with self._lock:
+            return list(self._errors)
+
+    def clear_transcript(self) -> None:
+        with self._lock:
+            self._transcript_parts.clear()
+            self._assistant_text_buffer = ""
+            self._errors.clear()
+
+    # -- Handler registration ------------------------------------------------
+
+    def _register_handlers(self, dispatcher: EventDispatcher) -> None:
+        """Wire up event handlers for audio, transcript, and error events."""
+        dispatcher.register("response.audio.delta", self._on_audio_delta)
+        dispatcher.register("response.audio_transcript.delta", self._on_transcript_delta)
+        dispatcher.register("response.audio_transcript.done", self._on_transcript_done)
+        dispatcher.register("response.text.delta", self._on_text_delta)
+        dispatcher.register("response.text.done", self._on_text_done)
+        dispatcher.register(
+            "conversation.item.input_audio_transcription.completed",
+            self._on_user_transcription,
+        )
+        dispatcher.register("error", self._on_error)
+
+    async def _on_audio_delta(self, event: _ServerBase) -> None:
+        """Decode audio delta and push into the playback buffer."""
+        assert isinstance(event, ResponseAudioDelta)
+        pcm = event.decode_audio()
+        self._audio_buffer.append(pcm)
+
+    async def _on_transcript_delta(self, event: _ServerBase) -> None:
+        """Accumulate assistant audio-transcript deltas."""
+        assert isinstance(event, ResponseAudioTranscriptDelta)
+        with self._lock:
+            self._assistant_text_buffer += event.delta
+
+    async def _on_transcript_done(self, event: _ServerBase) -> None:
+        """Finalize the assistant transcript turn."""
+        assert isinstance(event, ResponseAudioTranscriptDone)
+        with self._lock:
+            text = event.transcript or self._assistant_text_buffer
+            if text.strip():
+                self._transcript_parts.append({"role": "assistant", "text": text})
+            self._assistant_text_buffer = ""
+
+    async def _on_text_delta(self, event: _ServerBase) -> None:
+        """Accumulate assistant text deltas (text-only mode)."""
+        assert isinstance(event, ResponseTextDelta)
+        with self._lock:
+            self._assistant_text_buffer += event.delta
+
+    async def _on_text_done(self, event: _ServerBase) -> None:
+        """Finalize assistant text turn."""
+        assert isinstance(event, ResponseTextDone)
+        with self._lock:
+            text = event.text or self._assistant_text_buffer
+            if text.strip():
+                self._transcript_parts.append({"role": "assistant", "text": text})
+            self._assistant_text_buffer = ""
+
+    async def _on_user_transcription(self, event: _ServerBase) -> None:
+        """Add the user's speech transcription to the transcript."""
+        assert isinstance(event, ConversationItemTranscriptionCompleted)
+        with self._lock:
+            if event.transcript.strip():
+                self._transcript_parts.append({"role": "user", "text": event.transcript})
+
+    async def _on_error(self, event: _ServerBase) -> None:
+        """Log and surface errors."""
+        assert isinstance(event, ErrorEvent)
+        msg = f"[{event.code or 'error'}] {event.message}"
+        logger.error("Server error: %s", msg)
+        with self._lock:
+            self._errors.append(msg)
+            if len(self._errors) > 20:
+                self._errors = self._errors[-20:]

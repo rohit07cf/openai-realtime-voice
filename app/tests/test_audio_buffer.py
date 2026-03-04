@@ -91,7 +91,7 @@ class TestAudioBuffer:
         def producer():
             try:
                 for _ in range(1000):
-                    buf.append(b"\xAA" * 10)
+                    buf.append(b"\xaa" * 10)
             except Exception as e:
                 errors.append(e)
 
@@ -172,6 +172,7 @@ class TestCircuitBreakerResilience:
 
         # Wait for cooldown
         import time
+
         time.sleep(0.15)
         assert cb.state == CircuitState.HALF_OPEN
         assert cb.allow_request()

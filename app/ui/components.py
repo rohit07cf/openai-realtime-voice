@@ -160,6 +160,7 @@ def inject_custom_css() -> None:
 # Header
 # ---------------------------------------------------------------------------
 
+
 def render_header(state: ConnectionState) -> None:
     """Render the top header bar with title and connection badge."""
     dot_class = {
@@ -171,7 +172,8 @@ def render_header(state: ConnectionState) -> None:
     }.get(state, "gray")
     label = state.value.replace("_", " ").upper()
 
-    st.markdown(f"""
+    st.markdown(
+        f"""
     <div class="rt-header">
         <span class="rt-header-title">Realtime API</span>
         <div class="rt-conn-badge">
@@ -179,12 +181,15 @@ def render_header(state: ConnectionState) -> None:
             {label}
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------------------
+
 
 def render_sidebar_config() -> dict[str, Any]:
     """Render the configuration sidebar and return validated settings."""
@@ -214,7 +219,11 @@ def render_sidebar_config() -> dict[str, Any]:
     )
 
     temperature = st.sidebar.slider(
-        "Temperature", min_value=0.0, max_value=2.0, value=0.8, step=0.1,
+        "Temperature",
+        min_value=0.0,
+        max_value=2.0,
+        value=0.8,
+        step=0.1,
     )
 
     instructions = st.sidebar.text_area(
@@ -265,16 +274,20 @@ def render_sidebar_config() -> dict[str, Any]:
 # Connection controls
 # ---------------------------------------------------------------------------
 
+
 def render_connection_controls(state: ConnectionState) -> tuple[bool, bool]:
     """Render Connect / Disconnect buttons."""
     col1, col2, _ = st.columns([1, 1, 3])
     with col1:
         connect = st.button(
-            "Connect", disabled=state == ConnectionState.CONNECTED, type="primary",
+            "Connect",
+            disabled=state == ConnectionState.CONNECTED,
+            type="primary",
         )
     with col2:
         disconnect = st.button(
-            "Disconnect", disabled=state == ConnectionState.DISCONNECTED,
+            "Disconnect",
+            disabled=state == ConnectionState.DISCONNECTED,
         )
     return connect, disconnect
 
@@ -282,6 +295,7 @@ def render_connection_controls(state: ConnectionState) -> tuple[bool, bool]:
 # ---------------------------------------------------------------------------
 # User panel (left)
 # ---------------------------------------------------------------------------
+
 
 def render_user_panel(
     mic_state: MicState,
@@ -340,7 +354,7 @@ def render_user_panel(
     st.markdown(
         '<span class="mic-label">PUSH TO TALK</span>'
         '<span class="mic-sublabel">Click to start speaking, click again to send</span>'
-        '</div>',
+        "</div>",
         unsafe_allow_html=True,
     )
 
@@ -350,6 +364,7 @@ def render_user_panel(
 # ---------------------------------------------------------------------------
 # Agent panel (right)
 # ---------------------------------------------------------------------------
+
 
 def render_agent_panel(
     agent_state: AgentSpeakingState,
@@ -406,6 +421,7 @@ def render_agent_panel(
 # Footer
 # ---------------------------------------------------------------------------
 
+
 def render_footer(
     buffer_depth_sec: float,
     last_event_time: float,
@@ -420,7 +436,8 @@ def render_footer(
 
     stream_status = '<span class="active">ACTIVE</span>' if is_connected else "INACTIVE"
 
-    st.markdown(f"""
+    st.markdown(
+        f"""
     <div class="rt-footer">
         <div style="display:flex; gap:2rem;">
             <div>BUFFER: <span class="val">{buffer_depth_sec:.2f}s</span></div>
@@ -428,7 +445,9 @@ def render_footer(
             <div>EVENT STREAM: {stream_status}</div>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_debug_log(events: list[dict[str, Any]]) -> None:

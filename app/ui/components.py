@@ -107,6 +107,14 @@ def render_sidebar_config() -> dict[str, Any]:
     if uploaded is not None:
         st.session_state["agent_avatar"] = uploaded.getvalue()
 
+    # TTS playback toggle
+    st.sidebar.subheader("Audio Playback")
+    enable_tts = st.sidebar.toggle(
+        "Enable TTS (speak responses)",
+        value=True,
+        help="When enabled, the agent's audio response is played automatically.",
+    )
+
     return {
         "model": model,
         "voice": voice,
@@ -114,6 +122,7 @@ def render_sidebar_config() -> dict[str, Any]:
         "temperature": temperature,
         "instructions": instructions,
         "turn_detection": turn_config,
+        "enable_tts": enable_tts,
     }
 
 

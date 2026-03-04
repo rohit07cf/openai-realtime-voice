@@ -15,6 +15,7 @@ Layout:
 from __future__ import annotations
 
 import logging
+import time
 
 import streamlit as st
 
@@ -57,6 +58,7 @@ bridge: VoiceAgentBridge = st.session_state.bridge
 # Sidebar — configuration panel (API key loaded from env / .env)
 # ---------------------------------------------------------------------------
 cfg = render_sidebar_config()
+enable_tts: bool = cfg.get("enable_tts", True)
 
 # ---------------------------------------------------------------------------
 # Header
@@ -102,6 +104,9 @@ if connect_clicked:
 if disconnect_clicked:
     bridge.disconnect()
     st.session_state.pop("_last_audio_bytes", None)
+    st.session_state.pop("_agent_playback", None)
+    st.session_state.pop("_agent_autoplay", None)
+    st.session_state.pop("_audio_play_until", None)
     st.rerun()
 
 # ---------------------------------------------------------------------------
@@ -125,10 +130,33 @@ with col_agent:
         buffer_depth_sec=bridge.audio_buffer.depth_seconds,
     )
 
-    # Play agent audio when a response is complete
-    playback = bridge.get_playback_audio()
-    if playback:
-        st.audio(playback, format="audio/wav", autoplay=True)
+    # ------------------------------------------------------------------
+    # Agent audio playback (TTS)
+    # ------------------------------------------------------------------
+    if enable_tts:
+        # Check for new playback audio from bridge
+        new_playback = bridge.get_playback_audio()
+        if new_playback:
+            st.session_state["_agent_playback"] = new_playback
+            st.session_state["_agent_autoplay"] = True
+            # Estimate audio duration so we can pause auto-refresh
+            # WAV header is 44 bytes; rest is PCM16 (24 kHz, 16-bit mono)
+            pcm_bytes = max(len(new_playback) - 44, 0)
+            duration_sec = pcm_bytes / (24_000 * 2)
+            # Pause auto-refresh for the duration + 2 s buffer
+            st.session_state["_audio_play_until"] = time.time() + duration_sec + 2
+
+        # Render the audio player (persists across reruns via session state)
+        if "_agent_playback" in st.session_state:
+            should_autoplay = st.session_state.pop("_agent_autoplay", False)
+            st.audio(
+                st.session_state["_agent_playback"],
+                format="audio/wav",
+                autoplay=should_autoplay,
+            )
+    else:
+        # TTS disabled — drain any pending audio so it doesn't pile up
+        bridge.get_playback_audio()
 
 # ---------------------------------------------------------------------------
 # Process new audio recording (deduplicate across Streamlit reruns)
@@ -137,6 +165,9 @@ if audio_data is not None and is_connected:
     audio_bytes = audio_data.getvalue()
     if audio_bytes != st.session_state.get("_last_audio_bytes"):
         st.session_state["_last_audio_bytes"] = audio_bytes
+        # Clear old agent playback when user starts a new turn
+        st.session_state.pop("_agent_playback", None)
+        st.session_state.pop("_audio_play_until", None)
         with st.spinner("Sending audio to agent..."):
             try:
                 bridge.send_wav_audio(audio_bytes)
@@ -160,10 +191,11 @@ with footer_right:
     render_debug_log(bridge.event_log)
 
 # ---------------------------------------------------------------------------
-# Auto-refresh while connected (poll for new events)
+# Auto-refresh while connected
+# Paused while agent audio is playing so the <audio> element isn't destroyed
 # ---------------------------------------------------------------------------
 if bridge.connection_state == ConnectionState.CONNECTED:
-    import time
-
-    time.sleep(0.5)
-    st.rerun()
+    play_until = st.session_state.get("_audio_play_until", 0)
+    if time.time() >= play_until:
+        time.sleep(0.5)
+        st.rerun()

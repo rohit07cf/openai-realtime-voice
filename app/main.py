@@ -1,15 +1,7 @@
-"""Streamlit entrypoint for the OpenAI Realtime Voice Agent (Voice-Only).
+"""Streamlit entrypoint for the OpenAI Realtime Voice Agent.
 
 Run with:
     streamlit run app/main.py
-
-This module wires together the split-screen UI and the VoiceAgentBridge.
-It contains *zero* WebSocket or audio logic — all of that lives behind
-the bridge adapter.
-
-Layout:
-    LEFT column  = USER panel  (audio input, user transcript)
-    RIGHT column = AGENT panel (avatar, agent status, agent transcript)
 """
 
 from __future__ import annotations
@@ -23,11 +15,13 @@ from app.models.config import AppSettings, RealtimeConfig, TurnDetectionConfig
 from app.models.enums import ConnectionState, Modality, Voice
 from app.ui.bridge import VoiceAgentBridge
 from app.ui.components import (
+    inject_custom_css,
     render_agent_panel,
-    render_audio_status,
     render_connection_controls,
     render_debug_log,
     render_errors,
+    render_footer,
+    render_header,
     render_sidebar_config,
     render_user_panel,
 )
@@ -39,7 +33,7 @@ logger = logging.getLogger(__name__)
 # Page config
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="OpenAI Realtime Voice Agent",
+    page_title="Realtime API Dashboard",
     page_icon="🎙️",
     layout="wide",
 )
@@ -47,24 +41,29 @@ st.set_page_config(
 setup_logging("INFO")
 
 # ---------------------------------------------------------------------------
-# Session state: keep the bridge alive across Streamlit re-runs
+# Inject global CSS + custom header
+# ---------------------------------------------------------------------------
+inject_custom_css()
+
+# ---------------------------------------------------------------------------
+# Session state
 # ---------------------------------------------------------------------------
 if "bridge" not in st.session_state:
     st.session_state.bridge = VoiceAgentBridge()
 
 bridge: VoiceAgentBridge = st.session_state.bridge
+is_connected = bridge.connection_state == ConnectionState.CONNECTED
 
 # ---------------------------------------------------------------------------
-# Sidebar — configuration panel (API key loaded from env / .env)
+# Sidebar
 # ---------------------------------------------------------------------------
 cfg = render_sidebar_config()
 enable_tts: bool = cfg.get("enable_tts", True)
 
 # ---------------------------------------------------------------------------
-# Header
+# Header bar
 # ---------------------------------------------------------------------------
-st.title("OpenAI Realtime Voice Agent")
-st.caption("Voice-only interaction — record a message and it will be sent to the agent")
+render_header(bridge.connection_state)
 
 # ---------------------------------------------------------------------------
 # Connection controls
@@ -96,25 +95,20 @@ if connect_clicked:
         with st.spinner("Connecting to OpenAI Realtime API..."):
             success = bridge.connect(settings, realtime_cfg)
         if success:
-            st.success("Connected!")
             st.rerun()
         else:
             st.error("Connection failed. Check your API key and network.")
 
 if disconnect_clicked:
     bridge.disconnect()
-    st.session_state.pop("_last_audio_bytes", None)
-    st.session_state.pop("_agent_playback", None)
-    st.session_state.pop("_agent_autoplay", None)
-    st.session_state.pop("_audio_play_until", None)
+    for key in ("_last_audio_bytes", "_agent_playback", "_agent_autoplay", "_audio_play_until"):
+        st.session_state.pop(key, None)
     st.rerun()
 
 # ---------------------------------------------------------------------------
 # Split-screen: USER (left) | AGENT (right)
 # ---------------------------------------------------------------------------
 col_user, col_agent = st.columns(2)
-
-is_connected = bridge.connection_state == ConnectionState.CONNECTED
 
 with col_user:
     audio_data = render_user_panel(
@@ -134,19 +128,14 @@ with col_agent:
     # Agent audio playback (TTS)
     # ------------------------------------------------------------------
     if enable_tts:
-        # Check for new playback audio from bridge
         new_playback = bridge.get_playback_audio()
         if new_playback:
             st.session_state["_agent_playback"] = new_playback
             st.session_state["_agent_autoplay"] = True
-            # Estimate audio duration so we can pause auto-refresh
-            # WAV header is 44 bytes; rest is PCM16 (24 kHz, 16-bit mono)
             pcm_bytes = max(len(new_playback) - 44, 0)
             duration_sec = pcm_bytes / (24_000 * 2)
-            # Pause auto-refresh for the duration + 2 s buffer
             st.session_state["_audio_play_until"] = time.time() + duration_sec + 2
 
-        # Render the audio player (persists across reruns via session state)
         if "_agent_playback" in st.session_state:
             should_autoplay = st.session_state.pop("_agent_autoplay", False)
             st.audio(
@@ -155,17 +144,15 @@ with col_agent:
                 autoplay=should_autoplay,
             )
     else:
-        # TTS disabled — drain any pending audio so it doesn't pile up
         bridge.get_playback_audio()
 
 # ---------------------------------------------------------------------------
-# Process new audio recording (deduplicate across Streamlit reruns)
+# Process new audio recording
 # ---------------------------------------------------------------------------
 if audio_data is not None and is_connected:
     audio_bytes = audio_data.getvalue()
     if audio_bytes != st.session_state.get("_last_audio_bytes"):
         st.session_state["_last_audio_bytes"] = audio_bytes
-        # Clear old agent playback when user starts a new turn
         st.session_state.pop("_agent_playback", None)
         st.session_state.pop("_audio_play_until", None)
         with st.spinner("Sending audio to agent..."):
@@ -177,22 +164,20 @@ if audio_data is not None and is_connected:
         st.rerun()
 
 # ---------------------------------------------------------------------------
-# Footer: audio status + debug log
+# Footer
 # ---------------------------------------------------------------------------
 st.divider()
-footer_left, footer_right = st.columns(2)
-with footer_left:
-    render_audio_status(
-        buffer_depth_sec=bridge.audio_buffer.depth_seconds,
-        last_event_time=bridge.last_event_time,
-    )
-with footer_right:
-    render_errors(bridge.errors)
-    render_debug_log(bridge.event_log)
+render_footer(
+    buffer_depth_sec=bridge.audio_buffer.depth_seconds,
+    last_event_time=bridge.last_event_time,
+    is_connected=is_connected,
+)
+
+render_errors(bridge.errors)
+render_debug_log(bridge.event_log)
 
 # ---------------------------------------------------------------------------
-# Auto-refresh while connected
-# Paused while agent audio is playing so the <audio> element isn't destroyed
+# Auto-refresh (paused while agent audio is playing)
 # ---------------------------------------------------------------------------
 if bridge.connection_state == ConnectionState.CONNECTED:
     play_until = st.session_state.get("_audio_play_until", 0)

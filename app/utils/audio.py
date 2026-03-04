@@ -140,6 +140,20 @@ def encode_pcm16_to_base64(pcm_bytes: bytes) -> str:
     return base64.b64encode(pcm_bytes).decode("ascii")
 
 
+def pcm16_to_wav_bytes(pcm_data: bytes, sample_rate: int = SAMPLE_RATE) -> bytes:
+    """Wrap raw PCM16 mono data in a WAV container for ``st.audio`` playback."""
+    import io
+    import wave
+
+    with io.BytesIO() as buf:
+        with wave.open(buf, "wb") as wf:
+            wf.setnchannels(CHANNELS)
+            wf.setsampwidth(SAMPLE_WIDTH)
+            wf.setframerate(sample_rate)
+            wf.writeframes(pcm_data)
+        return buf.getvalue()
+
+
 def wav_bytes_to_pcm16_24k(wav_bytes: bytes) -> bytes:
     """Convert WAV audio bytes to PCM16 24 kHz mono for the OpenAI Realtime API.
 

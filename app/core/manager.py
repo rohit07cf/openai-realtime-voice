@@ -9,6 +9,33 @@ Pattern: Singleton — exactly one manager per process.  Ensures a single
 Why: Streamlit re-executes the script on every interaction.  If we
     created a new manager each time, we'd leak connections and tasks.
     The Singleton guarantees one durable session.
+
+OpenAI Realtime API Orchestration:
+This manager coordinates the entire interaction with the OpenAI Realtime API,
+managing the WebSocket connection for bidirectional event streaming. It handles
+session configuration (via session.update events), sends client events (e.g.,
+audio input, control commands), and receives server events (e.g., audio responses,
+transcripts). The API enables real-time conversational AI with low-latency voice
+streaming.
+
+WebSockets in Action:
+The manager uses a persistent WebSocket connection to OpenAI's servers for
+continuous, asynchronous data exchange. Unlike HTTP, WebSockets allow instant
+sending and receiving of events without polling, crucial for real-time voice
+applications. The connection supports large payloads (e.g., audio data) and
+handles reconnections with resilience patterns.
+
+WebRTC Integration Context:
+While WebRTC is not directly managed here, this manager interfaces with audio
+data that may originate from WebRTC in the UI layer (e.g., browser microphone
+capture). WebRTC provides peer-to-peer audio streaming, which can feed into
+this manager's event system for seamless voice input to the OpenAI API.
+
+Real-Time Operation:
+The manager runs a background receive loop that continuously reads events from
+the WebSocket and dispatches them immediately. This ensures real-time processing
+of AI responses, user interruptions, and audio streaming. Combined with concurrent
+dispatching, it supports natural, low-latency voice conversations.
 """
 
 from __future__ import annotations
@@ -114,6 +141,28 @@ class RealtimeManager:
         """Establish the WebSocket and send initial session.update.
 
         Returns True on success, False if the circuit breaker blocks.
+
+        WebSocket Connection Establishment:
+        This method initiates a secure WebSocket connection to OpenAI's Realtime API
+        using the RealtimeConnection class. It authenticates with the API key and
+        specifies the model (e.g., GPT-4o Realtime). The connection is persistent,
+        enabling continuous bidirectional communication.
+
+        OpenAI Realtime API Session Initialization:
+        Upon successful connection, it sends a session.update event to configure
+        the AI session (e.g., voice settings, tools, modalities). This sets up
+        the real-time conversational environment, allowing for voice input/output
+        and dynamic responses.
+
+        Real-Time Readiness:
+        Starting the background receive loop ensures the system is prepared to
+        handle incoming events immediately. This loop continuously listens for
+        server responses, dispatching them for real-time processing (e.g., audio
+        playback, UI updates).
+
+        Resilience Features:
+        Uses a circuit breaker to prevent repeated connection attempts on failure,
+        and handles errors gracefully to maintain system stability.
         """
         if self._state == ConnectionState.CONNECTED:
             logger.info("Already connected")
@@ -194,7 +243,25 @@ class RealtimeManager:
     # -- Sending events ------------------------------------------------------
 
     async def send(self, event: _ClientBase) -> None:
-        """Serialize and send a ClientEvent to the server."""
+        """Serialize and send a ClientEvent to the server.
+
+        OpenAI Realtime API Client Events:
+        This method sends events to the OpenAI Realtime API over the WebSocket,
+        such as audio input buffers, session updates, or control commands.
+        Events are serialized to JSON and transmitted asynchronously, enabling
+        real-time interaction. For example, streaming user voice data as it
+        is captured allows for immediate AI processing and responses.
+
+        WebSocket Transmission:
+        Utilizes the underlying WebSocket connection for low-latency delivery.
+        The persistent connection ensures events are sent instantly without
+        establishing new HTTP requests, supporting continuous voice conversations.
+
+        Real-Time Voice Input:
+        Critical for sending audio chunks in real-time, allowing the AI to
+        respond dynamically to user speech, including handling interruptions
+        or follow-up questions seamlessly.
+        """
         if self._conn is None or not self._conn.is_open:
             raise RuntimeError("Cannot send — not connected")
         payload = event.model_dump(exclude_none=True)
@@ -212,7 +279,36 @@ class RealtimeManager:
         logger.info("Sent session.update with config")
 
     async def _receive_loop(self) -> None:
-        """Background task: read events from the WebSocket and dispatch."""
+        """Background task: read events from the WebSocket and dispatch.
+
+        Real-Time Event Reception:
+        This background loop continuously reads incoming events from the OpenAI
+        Realtime API via the WebSocket connection. It runs asynchronously,
+        ensuring that server responses (e.g., AI audio, transcripts) are processed
+        immediately upon arrival, maintaining low-latency real-time interactions.
+
+        OpenAI Realtime API Server Events:
+        Events received include audio deltas for streaming AI voice responses,
+        transcript updates, error notifications, and session acknowledgments.
+        Each event is parsed from JSON into typed objects and dispatched to
+        registered handlers for processing.
+
+        WebSocket Continuous Listening:
+        Unlike HTTP polling, the WebSocket allows persistent listening for
+        events. The loop blocks on receive() until data arrives, then dispatches
+        concurrently, enabling simultaneous handling of multiple event types
+        (e.g., audio playback and UI updates).
+
+        Resilience and Error Handling:
+        If the connection fails, it triggers reconnection with backoff and
+        circuit breaker protection. Errors in individual events are logged,
+        but the loop continues to maintain real-time operation.
+
+        WebRTC Audio Integration:
+        Received audio events can be integrated with WebRTC for playback
+        in the browser, creating a seamless voice pipeline from AI generation
+        to user hearing.
+        """
         assert self._conn is not None
         try:
             while self._state == ConnectionState.CONNECTED:

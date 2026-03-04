@@ -6,6 +6,30 @@ Pattern: Pydantic Settings (env-driven) + domain model (RealtimeConfig).
 Why: In a streaming system, an invalid sample-rate or missing API key
     discovered *after* the WebSocket handshake wastes time and confuses
     error diagnostics.  Pydantic catches these at the boundary.
+
+OpenAI Realtime API Configuration:
+This module defines the configuration models for the OpenAI Realtime API,
+ensuring all settings are validated before use. The Realtime API requires
+specific session configurations sent via WebSocket events (e.g., session.update)
+to control voice, audio formats, and modalities for real-time interactions.
+
+WebSockets Integration:
+Configurations are serialized and sent over the WebSocket connection to
+OpenAI's servers. For example, the RealtimeConfig's to_session_payload method
+creates the JSON payload for the session.update event, which configures the
+AI session in real-time without restarting the connection.
+
+WebRTC Context:
+Audio formats (e.g., PCM16) specified here must align with WebRTC audio
+streams used in the client-side UI. WebRTC handles browser-based audio
+capture/playback, and these configs ensure compatibility for seamless
+voice input/output in real-time conversations.
+
+Real-Time Operation:
+Settings like turn detection, modalities (text/audio), and voice control
+how the AI responds in real-time. For instance, server VAD enables automatic
+turn-taking in voice chats, while audio formats ensure low-latency streaming
+over WebSockets, supporting natural, uninterrupted AI voice interactions.
 """
 
 from __future__ import annotations
@@ -27,6 +51,12 @@ class AppSettings(BaseSettings):
 
     Responsibility: Single source of truth for secrets and tunables.
     Pattern: Pydantic Settings — validates env vars at import time.
+
+    OpenAI Realtime API Settings:
+    These settings load from environment variables or .env files, providing
+    the API key for authentication and defaults for the real-time session.
+    The API key is essential for establishing WebSocket connections to
+    OpenAI's Realtime API, enabling secure, authenticated voice streaming.
     """
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
@@ -51,6 +81,13 @@ class TurnDetectionConfig(BaseModel):
     """Voice Activity Detection / turn-detection parameters.
 
     Maps directly to the ``turn_detection`` object in ``session.update``.
+
+    Real-Time Turn Detection:
+    Configures how the OpenAI Realtime API detects when the user stops speaking,
+    allowing the AI to respond automatically. Server VAD (Voice Activity Detection)
+    analyzes audio in real-time over the WebSocket, enabling natural conversation
+    flow without manual triggers. Parameters like threshold and silence duration
+    fine-tune sensitivity for low-latency turn-taking in voice interactions.
     """
 
     type: TurnDetectionType = TurnDetectionType.SERVER_VAD
@@ -72,6 +109,12 @@ class RealtimeConfig(BaseModel):
     Pattern: Value Object — immutable after creation.
     Why: A single typo in ``input_audio_format`` could silently cause
         garbled playback.  Strict validation eliminates that risk.
+
+    OpenAI Realtime API Session Config:
+    This model encapsulates all configurable aspects of a Realtime API session,
+    such as voice, temperature, and audio formats. It's sent via the session.update
+    event over WebSocket to dynamically configure the AI's behavior during
+    real-time conversations, allowing adjustments without disconnecting.
     """
 
     model: str = "gpt-4o-realtime-preview-2024-12-17"
@@ -98,7 +141,21 @@ class RealtimeConfig(BaseModel):
         return v
 
     def to_session_payload(self) -> dict:
-        """Serialize to the JSON body expected by ``session.update``."""
+        """Serialize to the JSON body expected by ``session.update``.
+
+        WebSocket Session Update:
+        This method converts the RealtimeConfig into a JSON payload sent
+        over the WebSocket as a session.update event. The OpenAI Realtime API
+        uses this to configure the AI session in real-time, allowing dynamic
+        changes to voice, modalities, and audio settings without reconnecting.
+
+        Real-Time Configuration:
+        Sending this payload enables immediate application of settings like
+        turn detection and audio formats, ensuring the AI adapts instantly
+        to user preferences during ongoing voice conversations. This supports
+        seamless real-time interactions by aligning server-side processing
+        with client expectations.
+        """
         payload: dict = {
             "modalities": [m.value for m in self.modalities],
             "instructions": self.instructions,

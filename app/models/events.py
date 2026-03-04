@@ -7,6 +7,30 @@ Why: The Realtime API transmits dozens of event types over a single WebSocket.
     Without a discriminated union, every handler must defensively check keys.
     With it, ``model_validate`` gives you the *exact* subclass — or a clear
     ``ValidationError`` — eliminating an entire class of silent-corruption bugs.
+
+OpenAI Realtime API Events:
+This module defines all event types used in the OpenAI Realtime API for
+bidirectional communication over WebSockets. Client events (e.g., session.update,
+input_audio_buffer.append) are sent to configure and stream audio to the AI.
+Server events (e.g., response.audio.delta, error) are received in response,
+enabling real-time voice interactions.
+
+WebSockets and Event Streaming:
+Events are serialized to/from JSON and transmitted over the persistent WebSocket
+connection. This allows low-latency, asynchronous exchange of control messages,
+audio data, and status updates without HTTP polling, crucial for real-time apps.
+
+WebRTC Integration:
+Audio-related events, such as ResponseAudioDelta (containing base64-encoded
+PCM audio), can be decoded and played via WebRTC in the browser UI. WebRTC
+handles client-side audio capture/playback, integrating seamlessly with these
+events for end-to-end voice streaming.
+
+Real-Time Operation:
+The system relies on frequent events like audio deltas arriving multiple times
+per second during AI speech. Parsing and dispatching these immediately ensures
+low-latency responses, supporting natural conversations with interruptions and
+dynamic audio streaming.
 """
 
 from __future__ import annotations
@@ -28,14 +52,26 @@ class _ClientBase(BaseModel):
 
 
 class SessionUpdateEvent(_ClientBase):
-    """``session.update`` — push validated config to the server."""
+    """``session.update`` — push validated config to the server.
+
+    OpenAI Realtime API Session Configuration:
+    Sent over WebSocket to configure the AI session (e.g., voice, modalities).
+    This event allows dynamic setup without reconnecting, enabling real-time
+    adjustments during conversations.
+    """
 
     type: Literal["session.update"] = "session.update"
     session: dict = Field(..., description="Session configuration payload")
 
 
 class InputAudioBufferAppend(_ClientBase):
-    """``input_audio_buffer.append`` — stream a chunk of PCM16 audio."""
+    """``input_audio_buffer.append`` — stream a chunk of PCM16 audio.
+
+    Real-Time Audio Streaming:
+    Sends base64-encoded audio chunks from the user's microphone over WebSocket.
+    This enables continuous voice input to the OpenAI Realtime API, supporting
+    live conversations with low-latency processing.
+    """
 
     type: Literal["input_audio_buffer.append"] = "input_audio_buffer.append"
     audio: str = Field(..., description="Base64-encoded audio bytes")
@@ -190,6 +226,10 @@ class ResponseAudioDelta(_ServerBase):
 
     This is the hottest event in the pipeline — arrives many times per
     second during playback.
+
+    Real-Time Audio Streaming:
+    Delivers incremental AI-generated audio over WebSocket. Frequent deltas
+    enable smooth, low-latency playback, supporting real-time voice responses.
     """
 
     type: Literal["response.audio.delta"] = "response.audio.delta"
@@ -200,7 +240,12 @@ class ResponseAudioDelta(_ServerBase):
     delta: str = ""  # base64-encoded audio
 
     def decode_audio(self) -> bytes:
-        """Decode the base64 delta into raw PCM bytes."""
+        """Decode the base64 delta into raw PCM bytes.
+
+        Audio Decoding for WebRTC:
+        Converts base64 audio to raw bytes for playback via WebRTC or audio
+        libraries, ensuring real-time audio output.
+        """
         return base64.b64decode(self.delta)
 
 
@@ -327,6 +372,11 @@ def parse_server_event(data: dict[str, Any]) -> _ServerBase:
     Uses the ``type`` field to look up the correct Pydantic model.
     Falls back to ``GenericServerEvent`` for unrecognized types so the
     pipeline never drops data silently.
+
+    Event Parsing for Real-Time Processing:
+    Converts incoming WebSocket JSON into typed objects for safe, immediate
+    dispatching. This ensures real-time handling of events like audio deltas
+    without type errors, maintaining low-latency voice interactions.
     """
     event_type = data.get("type", "unknown")
     model_cls = _SERVER_EVENT_MODELS.get(event_type)

@@ -7,14 +7,22 @@ Run with:
 from __future__ import annotations
 
 import logging
+import sys
 import time
+from pathlib import Path
 
-import streamlit as st
+# Ensure the repo root is on sys.path so "app" is importable even when
+# the package isn't installed (e.g. Streamlit Community Cloud).
+_REPO_ROOT = str(Path(__file__).resolve().parent.parent)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
-from app.models.config import AppSettings, RealtimeConfig, TurnDetectionConfig
-from app.models.enums import ConnectionState, Modality, Voice
-from app.ui.bridge import VoiceAgentBridge
-from app.ui.components import (
+import streamlit as st  # noqa: E402
+
+from app.models.config import AppSettings, RealtimeConfig, TurnDetectionConfig  # noqa: E402
+from app.models.enums import ConnectionState, Modality, Voice  # noqa: E402
+from app.ui.bridge import VoiceAgentBridge  # noqa: E402
+from app.ui.components import (  # noqa: E402
     inject_custom_css,
     render_agent_panel,
     render_connection_controls,
@@ -25,7 +33,7 @@ from app.ui.components import (
     render_sidebar_config,
     render_user_panel,
 )
-from app.utils.logging import setup_logging
+from app.utils.logging import setup_logging  # noqa: E402
 
 logger = logging.getLogger(__name__)
 

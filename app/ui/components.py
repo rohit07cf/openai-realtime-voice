@@ -2,6 +2,30 @@
 
 Styled to match a dark, minimal dashboard inspired by the OpenAI
 Realtime API reference design.
+
+OpenAI Realtime API UI Integration:
+This module provides Streamlit components that visualize the real-time
+voice interactions with the OpenAI Realtime API. Panels display live
+transcripts, connection states, and audio statuses, updated dynamically
+as events arrive from the WebSocket connection.
+
+WebSockets and Real-Time Updates:
+The components render data fetched from the VoiceAgentBridge, which
+processes events received over WebSockets from OpenAI. Real-time updates
+include audio deltas, transcripts, and state changes, ensuring the UI
+reflects live conversation progress without polling.
+
+WebRTC Context:
+While WebRTC is not directly implemented here, the UI components are
+designed to integrate with WebRTC for browser-based audio capture/playback.
+For example, microphone states and audio playback are managed to support
+seamless voice I/O in real-time applications.
+
+Real-Time Operation:
+Components like render_user_panel and render_agent_panel display
+instantaneous transcripts and statuses, allowing users to see AI responses
+and their own speech in real-time. This creates an interactive dashboard
+for monitoring and controlling voice conversations.
 """
 
 from __future__ import annotations
@@ -267,6 +291,12 @@ def render_user_panel(
     """Render the User Input (Audio) panel.
 
     Returns the recorded audio (``UploadedFile``) or ``None``.
+
+    Real-Time User Input Display:
+    This panel shows the current microphone state (idle, recording, sending)
+    and live transcripts of user speech. Transcripts are updated in real-time
+    as they arrive from the OpenAI Realtime API via WebSocket events, allowing
+    users to see their speech being processed instantly.
     """
     st.markdown('<div class="panel-label">User Input (Audio)</div>', unsafe_allow_html=True)
 
@@ -326,7 +356,15 @@ def render_agent_panel(
     agent_transcript: list[str],
     buffer_depth_sec: float,
 ) -> None:
-    """Render the Model Output (Text/Audio) panel."""
+    """Render the Model Output (Text/Audio) panel.
+
+    Real-Time Agent Output Display:
+    Displays the AI's speaking state (idle, thinking, speaking) and live
+    transcripts of AI responses. Transcripts and states are updated in
+    real-time from WebSocket events, such as audio deltas and transcript
+    deltas from the OpenAI Realtime API, providing immediate feedback
+    during voice conversations.
+    """
     label = "Model Output (Text / Audio)"
     st.markdown(
         f'<div class="panel-label">{label}</div>',

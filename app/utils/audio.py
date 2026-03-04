@@ -8,6 +8,27 @@ Pattern: Producer-Consumer via a bounded queue with a simple bytes
 Why: Streamlit runs in a different thread from asyncio.  Without a
     thread-safe buffer, audio playback will glitch, skip, or crash
     with race-condition corruption.
+
+OpenAI Realtime API Audio Handling:
+This module processes audio data for the OpenAI Realtime API, handling
+PCM16 format required by the API. Audio arrives as base64-encoded deltas
+over WebSockets and is decoded, buffered, and converted for playback.
+
+WebSockets and Audio Streaming:
+Audio deltas from the API are received as base64 strings in WebSocket
+events (e.g., response.audio.delta). These are decoded to raw PCM bytes
+for immediate buffering and playback, enabling real-time voice streaming.
+
+WebRTC Integration:
+Audio formats (PCM16, WAV) are compatible with WebRTC for browser-based
+audio capture/playback. Functions like wav_bytes_to_pcm16_24k convert
+browser-recorded audio to API-compatible format, supporting seamless
+voice input/output in real-time applications.
+
+Real-Time Operation:
+The AudioBuffer ensures thread-safe accumulation of audio chunks as they
+arrive, preventing corruption during concurrent access. Conversions happen
+instantly to support low-latency playback and transmission.
 """
 
 from __future__ import annotations
@@ -35,6 +56,12 @@ class AudioBuffer:
 
     Implementation uses a ``deque`` protected by a ``threading.Lock``
     so it works across asyncio ↔ sync boundaries.
+
+    Real-Time Audio Buffering:
+    Buffers audio data from WebSocket events (e.g., response.audio.delta)
+    in a thread-safe manner. The async event loop appends chunks as they
+    arrive, while the UI thread reads for playback, ensuring smooth,
+    real-time audio output without race conditions.
     """
 
     def __init__(self, max_bytes: int = 5 * SAMPLE_RATE * SAMPLE_WIDTH) -> None:
@@ -113,7 +140,14 @@ class AudioBuffer:
 
 
 def decode_audio_delta(b64_data: str) -> bytes:
-    """Decode a base64 audio delta string into raw PCM16 bytes."""
+    """Decode a base64 audio delta string into raw PCM16 bytes.
+
+    WebSocket Audio Decoding:
+    Audio deltas from the OpenAI Realtime API arrive as base64-encoded
+    strings over WebSockets. This function decodes them to raw PCM16
+    bytes for immediate buffering and playback, supporting real-time
+    voice streaming.
+    """
     return base64.b64decode(b64_data)
 
 
@@ -141,7 +175,14 @@ def encode_pcm16_to_base64(pcm_bytes: bytes) -> str:
 
 
 def pcm16_to_wav_bytes(pcm_data: bytes, sample_rate: int = SAMPLE_RATE) -> bytes:
-    """Wrap raw PCM16 mono data in a WAV container for ``st.audio`` playback."""
+    """Wrap raw PCM16 mono data in a WAV container for ``st.audio`` playback.
+
+    Real-Time Audio Playback Preparation:
+    Converts PCM16 bytes from WebSocket events into WAV format for
+    Streamlit's st.audio widget. This enables immediate playback of
+    AI-generated voice in real-time, integrating with WebRTC-compatible
+    audio for seamless user experience.
+    """
     import io
     import wave
 
@@ -159,6 +200,12 @@ def wav_bytes_to_pcm16_24k(wav_bytes: bytes) -> bytes:
 
     Handles arbitrary sample rates, channel counts, and bit depths
     coming from the browser's ``st.audio_input`` widget.
+
+    WebRTC Audio Input Processing:
+    Converts browser-recorded WAV audio (potentially from WebRTC) to
+    PCM16 24 kHz mono format required by the OpenAI Realtime API.
+    This enables sending user voice input over WebSockets in real-time,
+    supporting live conversations with proper audio resampling and mixing.
     """
     import io
     import wave

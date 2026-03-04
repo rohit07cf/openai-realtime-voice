@@ -11,6 +11,30 @@ Why: Streamlit re-runs the entire script on every widget interaction.
     schedule coroutines on a background event loop.  The bridge also
     decodes audio deltas into the thread-safe AudioBuffer, keeping the
     UI layer completely unaware of base64 or PCM16 details.
+
+OpenAI Realtime API Integration:
+This bridge connects the Streamlit UI to the OpenAI Realtime API via the
+RealtimeManager, handling voice-only interactions. It sends audio input
+and receives AI responses in real-time, managing session lifecycle and
+event dispatching.
+
+WebSockets and Real-Time Communication:
+The bridge schedules async operations on a background event loop to
+communicate with the WebSocket connection to OpenAI. Events like audio
+deltas are received asynchronously and processed immediately for low-latency
+voice streaming.
+
+WebRTC Context:
+While WebRTC is not directly used here, the bridge handles audio data
+that can be integrated with WebRTC for browser-based capture/playback.
+Audio chunks are decoded from base64 (from WebSocket events) and buffered
+for playback, enabling seamless voice I/O in real-time applications.
+
+Real-Time Operation:
+The bridge maintains UI states (mic, agent speaking) and accumulates
+transcripts/audio in real-time. Handlers process incoming events instantly,
+ensuring responsive voice conversations with immediate audio playback and
+transcript updates.
 """
 
 from __future__ import annotations
@@ -105,7 +129,17 @@ class VoiceAgentBridge:
     # -- Connection ----------------------------------------------------------
 
     def connect(self, settings: AppSettings, config: RealtimeConfig) -> bool:
-        """Connect to OpenAI Realtime API. Returns True on success."""
+        """Connect to OpenAI Realtime API. Returns True on success.
+
+        Establishes WebSocket Connection:
+        Initializes the RealtimeManager with API key and config, then connects
+        to OpenAI's Realtime API via WebSocket. Registers event handlers for
+        real-time processing of audio, transcripts, and errors.
+
+        Real-Time Session Setup:
+        Upon connection, the session is configured for voice interactions,
+        enabling immediate bidirectional audio streaming and event exchange.
+        """
         RealtimeManager.reset_singleton()
         self._manager = RealtimeManager(api_key=settings.openai_api_key, config=config)
         self._register_handlers(self._manager.dispatcher)
@@ -165,7 +199,14 @@ class VoiceAgentBridge:
         return self._audio_buffer
 
     def send_audio_chunk(self, pcm_bytes: bytes) -> None:
-        """Send a chunk of PCM16 audio to the server."""
+        """Send a chunk of PCM16 audio to the server.
+
+        Real-Time Audio Streaming:
+        Encodes PCM audio bytes to base64 and sends them over WebSocket as
+        an input_audio_buffer.append event. This enables continuous voice
+        input to the OpenAI Realtime API, supporting live, low-latency
+        conversations.
+        """
         if not self._manager:
             return
         event = InputAudioBufferAppend.from_bytes(pcm_bytes)
@@ -282,6 +323,12 @@ class VoiceAgentBridge:
         """Decode audio delta and push into the playback buffer.
 
         Transitions agent state to SPEAKING on the first delta.
+
+        Real-Time Audio Playback:
+        Decodes base64 audio from WebSocket events into PCM bytes and buffers
+        them for immediate playback. This handles frequent audio deltas from
+        the OpenAI Realtime API, enabling smooth, real-time AI voice output.
+        Updates UI state to reflect active speaking.
         """
         assert isinstance(event, ResponseAudioDelta)
         pcm = event.decode_audio()

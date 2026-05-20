@@ -123,8 +123,13 @@ if cfg.get("apply_clicked") and is_connected:
         instructions=cfg["instructions"],
         turn_detection=turn_detection,
     )
-    if bridge.apply_config(realtime_cfg):
+    result = bridge.apply_config(realtime_cfg)
+    if result == "updated":
         st.toast("Settings sent to live session.", icon="✅")
+    elif result == "reconnected":
+        st.toast("Voice changed — session restarted, history cleared.", icon="🔄")
+    elif result == "not_connected":
+        st.toast("Not connected — nothing to apply.", icon="⚠️")
     else:
         st.toast("Failed to apply settings.", icon="⚠️")
     st.rerun()

@@ -103,6 +103,13 @@ class VoiceAgentBridge:
         self._response_audio_chunks: list[bytes] = []
         self._playback_audio: bytes | None = None
 
+        # Config tracking for in-place vs. reconnect apply decisions.
+        # The Realtime API locks the voice once the assistant has produced
+        # audio, so a voice change after that requires a fresh session.
+        self._settings: AppSettings | None = None
+        self._active_config: RealtimeConfig | None = None
+        self._audio_present = False
+
     # -- Event loop management -----------------------------------------------
 
     def _ensure_loop(self) -> asyncio.AbstractEventLoop:
@@ -143,23 +150,61 @@ class VoiceAgentBridge:
         RealtimeManager.reset_singleton()
         self._manager = RealtimeManager(api_key=settings.openai_api_key, config=config)
         self._register_handlers(self._manager.dispatcher)
-        return self._run_coro(self._manager.connect())
+        ok = self._run_coro(self._manager.connect())
+        if ok:
+            self._settings = settings
+            self._active_config = config
+            with self._lock:
+                self._audio_present = False
+        return ok
 
-    def apply_config(self, config: RealtimeConfig) -> bool:
-        """Push a new RealtimeConfig to the live session via session.update.
+    def apply_config(self, config: RealtimeConfig) -> str:
+        """Apply a new RealtimeConfig to the live session.
 
-        Returns True if the update was sent, False if not connected.
-        Server-side rejection (e.g. voice locked after first audio) surfaces
-        later as an error event in ``bridge.errors``.
+        Returns a status string:
+        - ``"updated"``     — pushed in-place via session.update
+        - ``"reconnected"`` — voice changed after audio; session restarted
+        - ``"not_connected"`` — no active session
+        - ``"failed"``      — the apply/reconnect attempt errored
+
+        The Realtime API rejects voice changes once the assistant has produced
+        audio (``cannot_update_voice``). In that case we transparently restart
+        the session with the new config rather than surfacing a hard error.
         """
         if not self._manager or self.connection_state != ConnectionState.CONNECTED:
-            return False
+            return "not_connected"
+
+        voice_changed = (
+            self._active_config is None or config.voice != self._active_config.voice
+        )
+        with self._lock:
+            audio_present = self._audio_present
+
+        if voice_changed and audio_present:
+            return "reconnected" if self._reconnect_with(config) else "failed"
+
         try:
             self._run_coro(self._manager.apply_config(config))
-            return True
+            self._active_config = config
+            return "updated"
         except Exception:
             logger.exception("apply_config failed")
+            return "failed"
+
+    def _reconnect_with(self, config: RealtimeConfig) -> bool:
+        """Restart the session with *config* (used when voice is locked).
+
+        Clears the transcript to reflect that server-side conversation history
+        is reset by the new session.
+        """
+        if self._settings is None:
             return False
+        settings = self._settings
+        self.disconnect()
+        ok = self.connect(settings, config)
+        if ok:
+            self.clear_transcript()
+        return ok
 
     def disconnect(self) -> None:
         """Disconnect from the API."""
@@ -170,6 +215,7 @@ class VoiceAgentBridge:
             self._agent_state = AgentSpeakingState.IDLE
             self._response_audio_chunks.clear()
             self._playback_audio = None
+            self._audio_present = False
 
     @property
     def connection_state(self) -> ConnectionState:
@@ -355,6 +401,7 @@ class VoiceAgentBridge:
         self._audio_buffer.append(pcm)
         with self._lock:
             self._response_audio_chunks.append(pcm)
+            self._audio_present = True
             if self._agent_state != AgentSpeakingState.SPEAKING:
                 self._agent_state = AgentSpeakingState.SPEAKING
 

@@ -112,6 +112,23 @@ if disconnect_clicked:
         st.session_state.pop(key, None)
     st.rerun()
 
+if cfg.get("apply_clicked") and is_connected:
+    turn_detection = None
+    if cfg["turn_detection"]:
+        turn_detection = TurnDetectionConfig(**cfg["turn_detection"])
+    realtime_cfg = RealtimeConfig(
+        model=cfg["model"],
+        voice=Voice(cfg["voice"]),
+        modalities=[Modality(m) for m in cfg["modalities"]],
+        instructions=cfg["instructions"],
+        turn_detection=turn_detection,
+    )
+    if bridge.apply_config(realtime_cfg):
+        st.toast("Settings sent to live session.", icon="✅")
+    else:
+        st.toast("Failed to apply settings.", icon="⚠️")
+    st.rerun()
+
 # ---------------------------------------------------------------------------
 # Split-screen: USER (left) | AGENT (right)
 # ---------------------------------------------------------------------------

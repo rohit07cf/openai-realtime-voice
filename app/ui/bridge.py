@@ -145,6 +145,22 @@ class VoiceAgentBridge:
         self._register_handlers(self._manager.dispatcher)
         return self._run_coro(self._manager.connect())
 
+    def apply_config(self, config: RealtimeConfig) -> bool:
+        """Push a new RealtimeConfig to the live session via session.update.
+
+        Returns True if the update was sent, False if not connected.
+        Server-side rejection (e.g. voice locked after first audio) surfaces
+        later as an error event in ``bridge.errors``.
+        """
+        if not self._manager or self.connection_state != ConnectionState.CONNECTED:
+            return False
+        try:
+            self._run_coro(self._manager.apply_config(config))
+            return True
+        except Exception:
+            logger.exception("apply_config failed")
+            return False
+
     def disconnect(self) -> None:
         """Disconnect from the API."""
         if self._manager:

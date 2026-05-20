@@ -250,6 +250,19 @@ def render_sidebar_config() -> dict[str, Any]:
         help="When enabled, the agent's audio response is played automatically.",
     )
 
+    # Apply-to-live-session button. Voice can only be changed before the
+    # model's first audio output in a session; after that the server rejects
+    # the change and the user must disconnect+reconnect.
+    apply_clicked = st.sidebar.button(
+        "Apply to live session",
+        help=(
+            "Push the current settings to the active session via session.update. "
+            "Note: voice changes only take effect before the agent first speaks; "
+            "after that, disconnect and reconnect."
+        ),
+        use_container_width=True,
+    )
+
     return {
         "model": model,
         "voice": voice,
@@ -257,6 +270,7 @@ def render_sidebar_config() -> dict[str, Any]:
         "instructions": instructions,
         "turn_detection": turn_config,
         "enable_tts": enable_tts,
+        "apply_clicked": apply_clicked,
     }
 
 

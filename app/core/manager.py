@@ -135,6 +135,16 @@ class RealtimeManager:
     def update_api_key(self, api_key: str) -> None:
         self._api_key = api_key
 
+    async def apply_config(self, config: RealtimeConfig) -> None:
+        """Replace the stored config and push it to the server as session.update.
+
+        Raises whatever ``send()`` raises (e.g. RuntimeError if not connected).
+        Server-side rejections (e.g. voice locked after first audio) arrive
+        asynchronously as ``error`` events.
+        """
+        self._config = config
+        await self._send_session_update()
+
     # -- Connection lifecycle ------------------------------------------------
 
     async def connect(self) -> bool:

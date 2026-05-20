@@ -11,11 +11,11 @@ import pytest
 from app.models.enums import AgentSpeakingState, MicState
 from app.models.events import (
     ConversationItemTranscriptionCompleted,
-    ResponseAudioDelta,
-    ResponseAudioDone,
-    ResponseAudioTranscriptDone,
     ResponseCreatedEvent,
     ResponseDoneEvent,
+    ResponseOutputAudioDelta,
+    ResponseOutputAudioDone,
+    ResponseOutputAudioTranscriptDone,
 )
 from app.ui.bridge import VoiceAgentBridge
 
@@ -75,14 +75,14 @@ class TestAgentSpeakingState:
         assert bridge.agent_state == AgentSpeakingState.THINKING
 
         # Audio delta transitions to speaking
-        event = ResponseAudioDelta(delta="AAAA")
+        event = ResponseOutputAudioDelta(delta="AAAA")
         await bridge._on_audio_delta(event)
         assert bridge.agent_state == AgentSpeakingState.SPEAKING
 
     @pytest.mark.asyncio
     async def test_response_done_resets_to_idle(self, bridge: VoiceAgentBridge):
         await bridge._on_response_created(ResponseCreatedEvent(response={}))
-        await bridge._on_audio_delta(ResponseAudioDelta(delta="AAAA"))
+        await bridge._on_audio_delta(ResponseOutputAudioDelta(delta="AAAA"))
         assert bridge.agent_state == AgentSpeakingState.SPEAKING
 
         await bridge._on_response_done(ResponseDoneEvent(response={}))
@@ -92,8 +92,8 @@ class TestAgentSpeakingState:
     async def test_audio_done_does_not_reset_state(self, bridge: VoiceAgentBridge):
         """audio.done fires per-part, not per-response. State stays SPEAKING."""
         await bridge._on_response_created(ResponseCreatedEvent(response={}))
-        await bridge._on_audio_delta(ResponseAudioDelta(delta="AAAA"))
-        await bridge._on_audio_done(ResponseAudioDone())
+        await bridge._on_audio_delta(ResponseOutputAudioDelta(delta="AAAA"))
+        await bridge._on_audio_done(ResponseOutputAudioDone())
         # Still speaking until response.done
         assert bridge.agent_state == AgentSpeakingState.SPEAKING
 
@@ -123,7 +123,7 @@ class TestSplitTranscript:
 
     @pytest.mark.asyncio
     async def test_agent_transcript_appends_to_agent(self, bridge: VoiceAgentBridge):
-        event = ResponseAudioTranscriptDone(transcript="Hello from agent")
+        event = ResponseOutputAudioTranscriptDone(transcript="Hello from agent")
         await bridge._on_transcript_done(event)
         assert len(bridge.agent_transcript) == 1
         assert bridge.agent_transcript[0] == "Hello from agent"

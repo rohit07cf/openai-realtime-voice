@@ -9,14 +9,14 @@ from __future__ import annotations
 import base64
 
 from app.models.events import (
-    ConversationItemCreated,
+    ConversationItemAdded,
     ErrorEvent,
     GenericServerEvent,
     InputAudioBufferAppend,
     InputAudioBufferCommit,
-    ResponseAudioDelta,
-    ResponseAudioTranscriptDelta,
     ResponseCreate,
+    ResponseOutputAudioDelta,
+    ResponseOutputAudioTranscriptDelta,
     SessionCreatedEvent,
     SessionUpdateEvent,
     parse_server_event,
@@ -46,7 +46,7 @@ class TestServerEventParsing:
         audio_bytes = b"\x00\x01\x02\x03"
         b64 = base64.b64encode(audio_bytes).decode()
         raw = {
-            "type": "response.audio.delta",
+            "type": "response.output_audio.delta",
             "delta": b64,
             "response_id": "resp_1",
             "item_id": "item_1",
@@ -54,26 +54,26 @@ class TestServerEventParsing:
             "content_index": 0,
         }
         event = parse_server_event(raw)
-        assert isinstance(event, ResponseAudioDelta)
+        assert isinstance(event, ResponseOutputAudioDelta)
         assert event.decode_audio() == audio_bytes
 
     def test_audio_transcript_delta(self):
         raw = {
-            "type": "response.audio_transcript.delta",
+            "type": "response.output_audio_transcript.delta",
             "delta": "Hello",
             "response_id": "resp_1",
         }
         event = parse_server_event(raw)
-        assert isinstance(event, ResponseAudioTranscriptDelta)
+        assert isinstance(event, ResponseOutputAudioTranscriptDelta)
         assert event.delta == "Hello"
 
-    def test_conversation_item_created(self):
+    def test_conversation_item_added(self):
         raw = {
-            "type": "conversation.item.created",
+            "type": "conversation.item.added",
             "item": {"id": "item_1", "type": "message", "role": "assistant"},
         }
         event = parse_server_event(raw)
-        assert isinstance(event, ConversationItemCreated)
+        assert isinstance(event, ConversationItemAdded)
         assert event.item["role"] == "assistant"
 
     def test_unknown_event_type_falls_back(self):

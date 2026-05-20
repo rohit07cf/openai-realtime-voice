@@ -39,7 +39,7 @@ streamlit run app/main.py
 ```
 
 1. Enter your OpenAI API key in the sidebar
-2. Adjust voice, temperature, and turn-detection settings
+2. Adjust voice and turn-detection settings
 3. Optionally upload an agent avatar image
 4. Click **Connect**
 5. Press **Push to Talk** to record, press **Stop & Send** to submit your audio
@@ -50,11 +50,12 @@ Create a `.env` file at the project root:
 
 ```env
 OPENAI_API_KEY=sk-...
-REALTIME_MODEL=gpt-4o-realtime-preview-2024-12-17
+REALTIME_MODEL=gpt-realtime
 VOICE=alloy
-TEMPERATURE=0.8
 LOG_LEVEL=INFO
 ```
+
+> **Note:** This project targets the **GA Realtime API**. The legacy `OpenAI-Beta: realtime=v1` header is not sent, and the session payload uses the GA shape (`type: 'realtime'`, `output_modalities`, nested `audio.input` / `audio.output`, `max_output_tokens`). The older `gpt-4o-realtime-preview-*` models are no longer accessible — use `gpt-realtime` or `gpt-realtime-mini`.
 
 ## Architecture
 
@@ -132,7 +133,7 @@ User presses ⏹ Stop & Send
          │
          ▼
   AgentState = SPEAKING
-  (response.audio.delta streaming)
+  (response.output_audio.delta streaming)
          │
          ▼
   response.done
@@ -203,13 +204,13 @@ Both transcript panels are **read-only**. Users cannot type into them.
 |-------|-----------|---------|
 | `IDLE` | ⚪ Idle | Initial / after `response.done` |
 | `THINKING` | 🟡 Thinking... | After `commit` / `response.create` |
-| `SPEAKING` | 🟢 Speaking... | First `response.audio.delta` arrives |
+| `SPEAKING` | 🟢 Speaking... | First `response.output_audio.delta` arrives |
 
 ## Design Document: Pydantic for Data Integrity in Streaming
 
 ### The Problem
 
-The OpenAI Realtime API transmits dozens of event types over a single WebSocket. Each event has a different schema. A `response.audio.delta` carries a base64-encoded audio chunk; an `error` carries a nested `error` object with `message`, `code`, and `param` fields. Session configuration includes floats with specific ranges, enums with specific values, and nullable sub-objects.
+The OpenAI Realtime API transmits dozens of event types over a single WebSocket. Each event has a different schema. A `response.output_audio.delta` carries a base64-encoded audio chunk; an `error` carries a nested `error` object with `message`, `code`, and `param` fields. Session configuration includes floats with specific ranges, enums with specific values, and nullable sub-objects.
 
 In a fast-moving streaming pipeline, **silent data corruption is the worst outcome**. A malformed config might produce garbled audio. A mistyped event field might crash the pipeline minutes later in an unrelated handler.
 
@@ -221,19 +222,19 @@ Every piece of external data — environment variables, user-entered config, and
 
 ```python
 class RealtimeConfig(BaseModel):
-    temperature: Annotated[float, Field(ge=0.0, le=2.0)] = 0.8
+    max_output_tokens: int | str = "inf"  # validated: int >= 1 or literal "inf"
     voice: Voice = Voice.ALLOY  # StrEnum — only valid voices accepted
 ```
 
-An invalid temperature or voice is caught *before* the `session.update` event is sent, not after the server rejects it with a cryptic error.
+An invalid voice or token limit is caught *before* the `session.update` event is sent, not after the server rejects it with a cryptic error.
 
 **2. Discriminated Unions for Event Routing**
 
-Instead of `if data["type"] == "response.audio.delta"` scattered through the codebase:
+Instead of `if data["type"] == "response.output_audio.delta"` scattered through the codebase:
 
 ```python
 ServerEvent = Annotated[
-    SessionCreatedEvent | ErrorEvent | ResponseAudioDelta | ...,
+    SessionCreatedEvent | ErrorEvent | ResponseOutputAudioDelta | ...,
     Field(discriminator="type"),
 ]
 ```
@@ -246,7 +247,7 @@ The `TurnDetectionConfig` model enforces that `threshold` is between 0 and 1, `s
 
 **4. Performance**
 
-Pydantic v2's Rust-based core (`pydantic-core`) validates models in microseconds. On the `response.audio.delta` hot path (tens of events per second), the overhead is negligible compared to base64 decoding and network I/O.
+Pydantic v2's Rust-based core (`pydantic-core`) validates models in microseconds. On the `response.output_audio.delta` hot path (tens of events per second), the overhead is negligible compared to base64 decoding and network I/O.
 
 ### Design Decision
 

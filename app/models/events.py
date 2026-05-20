@@ -190,10 +190,17 @@ class InputAudioBufferSpeechStopped(_ServerBase):
     item_id: str | None = None
 
 
-class ConversationItemCreated(_ServerBase):
-    """``conversation.item.created`` — new item in the conversation."""
+class ConversationItemAdded(_ServerBase):
+    """``conversation.item.added`` — new item appended to the conversation (GA)."""
 
-    type: Literal["conversation.item.created"] = "conversation.item.created"
+    type: Literal["conversation.item.added"] = "conversation.item.added"
+    item: dict = Field(default_factory=dict)
+
+
+class ConversationItemDone(_ServerBase):
+    """``conversation.item.done`` — item finalized (GA)."""
+
+    type: Literal["conversation.item.done"] = "conversation.item.done"
     item: dict = Field(default_factory=dict)
 
 
@@ -221,18 +228,14 @@ class ResponseDoneEvent(_ServerBase):
     response: dict = Field(default_factory=dict)
 
 
-class ResponseAudioDelta(_ServerBase):
-    """``response.audio.delta`` — a chunk of base64 audio.
+class ResponseOutputAudioDelta(_ServerBase):
+    """``response.output_audio.delta`` — a chunk of base64 audio (GA).
 
     This is the hottest event in the pipeline — arrives many times per
     second during playback.
-
-    Real-Time Audio Streaming:
-    Delivers incremental AI-generated audio over WebSocket. Frequent deltas
-    enable smooth, low-latency playback, supporting real-time voice responses.
     """
 
-    type: Literal["response.audio.delta"] = "response.audio.delta"
+    type: Literal["response.output_audio.delta"] = "response.output_audio.delta"
     response_id: str | None = None
     item_id: str | None = None
     output_index: int = 0
@@ -240,29 +243,26 @@ class ResponseAudioDelta(_ServerBase):
     delta: str = ""  # base64-encoded audio
 
     def decode_audio(self) -> bytes:
-        """Decode the base64 delta into raw PCM bytes.
-
-        Audio Decoding for WebRTC:
-        Converts base64 audio to raw bytes for playback via WebRTC or audio
-        libraries, ensuring real-time audio output.
-        """
+        """Decode the base64 delta into raw PCM bytes."""
         return base64.b64decode(self.delta)
 
 
-class ResponseAudioDone(_ServerBase):
-    """``response.audio.done`` — audio stream complete for this part."""
+class ResponseOutputAudioDone(_ServerBase):
+    """``response.output_audio.done`` — audio stream complete for this part (GA)."""
 
-    type: Literal["response.audio.done"] = "response.audio.done"
+    type: Literal["response.output_audio.done"] = "response.output_audio.done"
     response_id: str | None = None
     item_id: str | None = None
     output_index: int = 0
     content_index: int = 0
 
 
-class ResponseAudioTranscriptDelta(_ServerBase):
-    """``response.audio_transcript.delta`` — incremental transcript."""
+class ResponseOutputAudioTranscriptDelta(_ServerBase):
+    """``response.output_audio_transcript.delta`` — incremental transcript (GA)."""
 
-    type: Literal["response.audio_transcript.delta"] = "response.audio_transcript.delta"
+    type: Literal["response.output_audio_transcript.delta"] = (
+        "response.output_audio_transcript.delta"
+    )
     response_id: str | None = None
     item_id: str | None = None
     output_index: int = 0
@@ -270,10 +270,12 @@ class ResponseAudioTranscriptDelta(_ServerBase):
     delta: str = ""
 
 
-class ResponseAudioTranscriptDone(_ServerBase):
-    """``response.audio_transcript.done`` — final transcript for a part."""
+class ResponseOutputAudioTranscriptDone(_ServerBase):
+    """``response.output_audio_transcript.done`` — final transcript for a part (GA)."""
 
-    type: Literal["response.audio_transcript.done"] = "response.audio_transcript.done"
+    type: Literal["response.output_audio_transcript.done"] = (
+        "response.output_audio_transcript.done"
+    )
     response_id: str | None = None
     item_id: str | None = None
     output_index: int = 0
@@ -281,10 +283,10 @@ class ResponseAudioTranscriptDone(_ServerBase):
     transcript: str = ""
 
 
-class ResponseTextDelta(_ServerBase):
-    """``response.text.delta`` — incremental text content."""
+class ResponseOutputTextDelta(_ServerBase):
+    """``response.output_text.delta`` — incremental text content (GA)."""
 
-    type: Literal["response.text.delta"] = "response.text.delta"
+    type: Literal["response.output_text.delta"] = "response.output_text.delta"
     response_id: str | None = None
     item_id: str | None = None
     output_index: int = 0
@@ -292,10 +294,10 @@ class ResponseTextDelta(_ServerBase):
     delta: str = ""
 
 
-class ResponseTextDone(_ServerBase):
-    """``response.text.done`` — text generation complete."""
+class ResponseOutputTextDone(_ServerBase):
+    """``response.output_text.done`` — text generation complete (GA)."""
 
-    type: Literal["response.text.done"] = "response.text.done"
+    type: Literal["response.output_text.done"] = "response.output_text.done"
     response_id: str | None = None
     item_id: str | None = None
     output_index: int = 0
@@ -330,16 +332,17 @@ ServerEvent = Annotated[
     | InputAudioBufferCommitted
     | InputAudioBufferSpeechStarted
     | InputAudioBufferSpeechStopped
-    | ConversationItemCreated
+    | ConversationItemAdded
+    | ConversationItemDone
     | ConversationItemTranscriptionCompleted
     | ResponseCreatedEvent
     | ResponseDoneEvent
-    | ResponseAudioDelta
-    | ResponseAudioDone
-    | ResponseAudioTranscriptDelta
-    | ResponseAudioTranscriptDone
-    | ResponseTextDelta
-    | ResponseTextDone
+    | ResponseOutputAudioDelta
+    | ResponseOutputAudioDone
+    | ResponseOutputAudioTranscriptDelta
+    | ResponseOutputAudioTranscriptDone
+    | ResponseOutputTextDelta
+    | ResponseOutputTextDone
     | RateLimitsUpdated,
     Field(discriminator="type"),
 ]
@@ -352,16 +355,17 @@ _SERVER_EVENT_MODELS: dict[str, type[BaseModel]] = {
     "input_audio_buffer.committed": InputAudioBufferCommitted,
     "input_audio_buffer.speech_started": InputAudioBufferSpeechStarted,
     "input_audio_buffer.speech_stopped": InputAudioBufferSpeechStopped,
-    "conversation.item.created": ConversationItemCreated,
+    "conversation.item.added": ConversationItemAdded,
+    "conversation.item.done": ConversationItemDone,
     "conversation.item.input_audio_transcription.completed": ConversationItemTranscriptionCompleted,
     "response.created": ResponseCreatedEvent,
     "response.done": ResponseDoneEvent,
-    "response.audio.delta": ResponseAudioDelta,
-    "response.audio.done": ResponseAudioDone,
-    "response.audio_transcript.delta": ResponseAudioTranscriptDelta,
-    "response.audio_transcript.done": ResponseAudioTranscriptDone,
-    "response.text.delta": ResponseTextDelta,
-    "response.text.done": ResponseTextDone,
+    "response.output_audio.delta": ResponseOutputAudioDelta,
+    "response.output_audio.done": ResponseOutputAudioDone,
+    "response.output_audio_transcript.delta": ResponseOutputAudioTranscriptDelta,
+    "response.output_audio_transcript.done": ResponseOutputAudioTranscriptDone,
+    "response.output_text.delta": ResponseOutputTextDelta,
+    "response.output_text.done": ResponseOutputTextDone,
     "rate_limits.updated": RateLimitsUpdated,
 }
 

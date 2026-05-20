@@ -63,12 +63,11 @@ class AppSettings(BaseSettings):
 
     openai_api_key: str = Field(..., min_length=1, description="OpenAI API key (required)")
     realtime_model: str = Field(
-        default="gpt-4o-realtime-preview-2024-12-17",
+        default="gpt-realtime",
         description="Realtime model identifier",
     )
     voice: Voice = Field(default=Voice.ALLOY, description="Default TTS voice")
-    temperature: Annotated[float, Field(ge=0.0, le=2.0)] = 0.8
-    modalities: list[Modality] = Field(default=[Modality.TEXT, Modality.AUDIO])
+    modalities: list[Modality] = Field(default=[Modality.AUDIO])
     log_level: str = Field(default="INFO", pattern=r"^(DEBUG|INFO|WARNING|ERROR|CRITICAL)$")
 
 
@@ -117,21 +116,22 @@ class RealtimeConfig(BaseModel):
     real-time conversations, allowing adjustments without disconnecting.
     """
 
-    model: str = "gpt-4o-realtime-preview-2024-12-17"
-    modalities: list[Modality] = Field(default=[Modality.TEXT, Modality.AUDIO])
+    model: str = "gpt-realtime"
+    modalities: list[Modality] = Field(default=[Modality.AUDIO])
     instructions: str = Field(
         default="You are a helpful, concise voice assistant.",
         max_length=4096,
     )
     voice: Voice = Voice.ALLOY
-    temperature: Annotated[float, Field(ge=0.0, le=2.0)] = 0.8
     input_audio_format: AudioFormat = AudioFormat.PCM16
     output_audio_format: AudioFormat = AudioFormat.PCM16
     input_audio_transcription_model: str | None = "whisper-1"
     turn_detection: TurnDetectionConfig | None = Field(default_factory=TurnDetectionConfig)
-    max_response_output_tokens: int | str = Field(default=4096)
+    max_output_tokens: int | str = Field(default="inf")
+    audio_sample_rate: int = Field(default=24000, ge=8000, le=48000)
+    output_voice_speed: Annotated[float, Field(ge=0.25, le=4.0)] = 1.0
 
-    @field_validator("max_response_output_tokens")
+    @field_validator("max_output_tokens")
     @classmethod
     def _validate_max_tokens(cls, v: int | str) -> int | str:
         if isinstance(v, str) and v != "inf":
@@ -140,46 +140,48 @@ class RealtimeConfig(BaseModel):
             raise ValueError("Must be a positive integer or 'inf'")
         return v
 
+    def _format_payload(self) -> dict:
+        # GA expects a structured format object. PCM16 maps to audio/pcm with
+        # the negotiated sample rate; G711 codecs use their MIME types.
+        if self.input_audio_format == AudioFormat.PCM16:
+            return {"type": "audio/pcm", "rate": self.audio_sample_rate}
+        if self.input_audio_format == AudioFormat.G711_ULAW:
+            return {"type": "audio/pcmu"}
+        return {"type": "audio/pcma"}
+
     def to_session_payload(self) -> dict:
-        """Serialize to the JSON body expected by ``session.update``.
+        """Serialize to the JSON body expected by ``session.update`` (GA shape).
 
-        WebSocket Session Update:
-        This method converts the RealtimeConfig into a JSON payload sent
-        over the WebSocket as a session.update event. The OpenAI Realtime API
-        uses this to configure the AI session in real-time, allowing dynamic
-        changes to voice, modalities, and audio settings without reconnecting.
-
-        Real-Time Configuration:
-        Sending this payload enables immediate application of settings like
-        turn detection and audio formats, ensuring the AI adapts instantly
-        to user preferences during ongoing voice conversations. This supports
-        seamless real-time interactions by aligning server-side processing
-        with client expectations.
+        The GA Realtime API restructured the session object: voice, audio
+        formats, turn detection, and transcription all moved under a single
+        ``audio: {input: {...}, output: {...}}`` block, ``modalities`` became
+        ``output_modalities``, and ``max_response_output_tokens`` became
+        ``max_output_tokens``. The top-level ``type: 'realtime'`` discriminator
+        is also required.
         """
-        payload: dict = {
-            "modalities": [m.value for m in self.modalities],
-            "instructions": self.instructions,
-            "voice": self.voice.value,
-            "temperature": self.temperature,
-            "input_audio_format": self.input_audio_format.value,
-            "output_audio_format": self.output_audio_format.value,
-            "turn_detection": (
-                {
-                    "type": self.turn_detection.type.value,
-                    "threshold": self.turn_detection.threshold,
-                    "prefix_padding_ms": self.turn_detection.prefix_padding_ms,
-                    "silence_duration_ms": self.turn_detection.silence_duration_ms,
-                }
-                if self.turn_detection
-                else None
-            ),
-        }
-        if self.input_audio_transcription_model:
-            payload["input_audio_transcription"] = {
-                "model": self.input_audio_transcription_model,
+        audio_input: dict = {"format": self._format_payload()}
+        if self.turn_detection:
+            audio_input["turn_detection"] = {
+                "type": self.turn_detection.type.value,
+                "threshold": self.turn_detection.threshold,
+                "prefix_padding_ms": self.turn_detection.prefix_padding_ms,
+                "silence_duration_ms": self.turn_detection.silence_duration_ms,
             }
-        if isinstance(self.max_response_output_tokens, str):
-            payload["max_response_output_tokens"] = self.max_response_output_tokens
         else:
-            payload["max_response_output_tokens"] = self.max_response_output_tokens
-        return payload
+            audio_input["turn_detection"] = None
+        if self.input_audio_transcription_model:
+            audio_input["transcription"] = {"model": self.input_audio_transcription_model}
+
+        audio_output: dict = {
+            "format": self._format_payload(),
+            "voice": self.voice.value,
+            "speed": self.output_voice_speed,
+        }
+
+        return {
+            "type": "realtime",
+            "output_modalities": [m.value for m in self.modalities],
+            "instructions": self.instructions,
+            "audio": {"input": audio_input, "output": audio_output},
+            "max_output_tokens": self.max_output_tokens,
+        }

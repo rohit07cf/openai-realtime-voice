@@ -198,10 +198,8 @@ def render_sidebar_config() -> dict[str, Any]:
     model = st.sidebar.selectbox(
         "Model",
         options=[
-            "gpt-4o-realtime-preview-2024-12-17",
-            "gpt-4o-realtime-preview",
-            "gpt-4o-mini-realtime-preview-2024-12-17",
-            "gpt-4o-mini-realtime-preview",
+            "gpt-realtime",
+            "gpt-realtime-mini",
         ],
         index=0,
     )
@@ -213,17 +211,10 @@ def render_sidebar_config() -> dict[str, Any]:
     )
 
     modality_options = st.sidebar.multiselect(
-        "Modalities",
+        "Output modalities",
         options=[m.value for m in Modality],
-        default=["text", "audio"],
-    )
-
-    temperature = st.sidebar.slider(
-        "Temperature",
-        min_value=0.0,
-        max_value=2.0,
-        value=0.8,
-        step=0.1,
+        default=["audio"],
+        help="GA Realtime supports a single output modality per session: 'audio' (default) or 'text'.",
     )
 
     instructions = st.sidebar.text_area(
@@ -262,8 +253,7 @@ def render_sidebar_config() -> dict[str, Any]:
     return {
         "model": model,
         "voice": voice,
-        "modalities": modality_options or ["text", "audio"],
-        "temperature": temperature,
+        "modalities": modality_options or ["audio"],
         "instructions": instructions,
         "turn_detection": turn_config,
         "enable_tts": enable_tts,

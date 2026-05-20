@@ -263,7 +263,11 @@ class RealtimeManager:
         or follow-up questions seamlessly.
         """
         if self._conn is None or not self._conn.is_open:
-            raise RuntimeError("Cannot send — not connected")
+            code = self._conn.close_code if self._conn else None
+            reason = self._conn.close_reason if self._conn else None
+            raise RuntimeError(
+                f"Cannot send — not connected (close_code={code}, close_reason={reason!r})"
+            )
         payload = event.model_dump(exclude_none=True)
         await self._conn.send(payload)
         logger.debug("Sent %s", payload.get("type"))

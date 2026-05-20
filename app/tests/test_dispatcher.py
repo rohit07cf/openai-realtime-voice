@@ -12,7 +12,7 @@ import pytest
 from app.core.dispatcher import EventDispatcher
 from app.models.events import (
     ErrorEvent,
-    ResponseAudioDelta,
+    ResponseOutputAudioDelta,
     SessionCreatedEvent,
     parse_server_event,
 )
@@ -151,11 +151,11 @@ class TestEventDispatcher:
         async def handler(event):
             received.append(event)
 
-        dispatcher.register("response.audio.delta", handler)
+        dispatcher.register("response.output_audio.delta", handler)
 
-        raw = {"type": "response.audio.delta", "delta": "AAAA"}
+        raw = {"type": "response.output_audio.delta", "delta": "AAAA"}
         event = parse_server_event(raw)
         await dispatcher.dispatch(event)
 
         assert len(received) == 1
-        assert isinstance(received[0], ResponseAudioDelta)
+        assert isinstance(received[0], ResponseOutputAudioDelta)

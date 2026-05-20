@@ -55,13 +55,13 @@ from app.models.events import (
     InputAudioBufferAppend,
     InputAudioBufferClear,
     InputAudioBufferCommit,
-    ResponseAudioDelta,
-    ResponseAudioDone,
-    ResponseAudioTranscriptDelta,
-    ResponseAudioTranscriptDone,
     ResponseCreate,
     ResponseCreatedEvent,
     ResponseDoneEvent,
+    ResponseOutputAudioDelta,
+    ResponseOutputAudioDone,
+    ResponseOutputAudioTranscriptDelta,
+    ResponseOutputAudioTranscriptDone,
     _ServerBase,
 )
 from app.utils.audio import AudioBuffer
@@ -296,10 +296,14 @@ class VoiceAgentBridge:
 
     def _register_handlers(self, dispatcher: EventDispatcher) -> None:
         """Wire up event handlers for audio, transcript, and error events."""
-        dispatcher.register("response.audio.delta", self._on_audio_delta)
-        dispatcher.register("response.audio.done", self._on_audio_done)
-        dispatcher.register("response.audio_transcript.delta", self._on_transcript_delta)
-        dispatcher.register("response.audio_transcript.done", self._on_transcript_done)
+        dispatcher.register("response.output_audio.delta", self._on_audio_delta)
+        dispatcher.register("response.output_audio.done", self._on_audio_done)
+        dispatcher.register(
+            "response.output_audio_transcript.delta", self._on_transcript_delta
+        )
+        dispatcher.register(
+            "response.output_audio_transcript.done", self._on_transcript_done
+        )
         dispatcher.register("response.created", self._on_response_created)
         dispatcher.register("response.done", self._on_response_done)
         dispatcher.register(
@@ -330,7 +334,7 @@ class VoiceAgentBridge:
         the OpenAI Realtime API, enabling smooth, real-time AI voice output.
         Updates UI state to reflect active speaking.
         """
-        assert isinstance(event, ResponseAudioDelta)
+        assert isinstance(event, ResponseOutputAudioDelta)
         pcm = event.decode_audio()
         self._audio_buffer.append(pcm)
         with self._lock:
@@ -340,7 +344,7 @@ class VoiceAgentBridge:
 
     async def _on_audio_done(self, event: _ServerBase) -> None:
         """Audio stream complete for this response part."""
-        assert isinstance(event, ResponseAudioDone)
+        assert isinstance(event, ResponseOutputAudioDone)
         # Agent will go IDLE when response.done fires
 
     async def _on_response_created(self, event: _ServerBase) -> None:
@@ -365,13 +369,13 @@ class VoiceAgentBridge:
 
     async def _on_transcript_delta(self, event: _ServerBase) -> None:
         """Accumulate assistant audio-transcript deltas."""
-        assert isinstance(event, ResponseAudioTranscriptDelta)
+        assert isinstance(event, ResponseOutputAudioTranscriptDelta)
         with self._lock:
             self._assistant_text_buffer += event.delta
 
     async def _on_transcript_done(self, event: _ServerBase) -> None:
         """Finalize the assistant transcript turn."""
-        assert isinstance(event, ResponseAudioTranscriptDone)
+        assert isinstance(event, ResponseOutputAudioTranscriptDone)
         with self._lock:
             text = event.transcript or self._assistant_text_buffer
             if text.strip():

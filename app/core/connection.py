@@ -76,6 +76,20 @@ class RealtimeConnection:
         except Exception:
             return self._ws is not None
 
+    @property
+    def close_code(self) -> int | None:
+        """WebSocket close code if the peer has closed, else None."""
+        if self._ws is None:
+            return None
+        return getattr(self._ws, "close_code", None)
+
+    @property
+    def close_reason(self) -> str | None:
+        """Human-readable close reason from the peer, if any."""
+        if self._ws is None:
+            return None
+        return getattr(self._ws, "close_reason", None)
+
     async def connect(self) -> None:
         """Open a WebSocket to the OpenAI Realtime endpoint.
 
@@ -95,9 +109,10 @@ class RealtimeConnection:
         control events, forming the foundation for real-time voice interactions with the AI.
         """
         url = f"{REALTIME_BASE_URL}?model={self._model}"
+        # OpenAI-Beta header is omitted: the Realtime GA API rejects connections
+        # carrying `realtime=v1` with `beta_api_shape_disabled`.
         headers = {
             "Authorization": f"Bearer {self._api_key}",
-            "OpenAI-Beta": "realtime=v1",
         }
         logger.info("Connecting to %s", url)
         self._ws = await websockets.connect(

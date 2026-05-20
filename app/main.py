@@ -96,7 +96,6 @@ if connect_clicked:
             model=cfg["model"],
             voice=Voice(cfg["voice"]),
             modalities=[Modality(m) for m in cfg["modalities"]],
-            temperature=cfg["temperature"],
             instructions=cfg["instructions"],
             turn_detection=turn_detection,
         )
